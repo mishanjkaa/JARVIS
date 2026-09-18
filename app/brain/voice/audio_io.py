@@ -278,6 +278,32 @@ def _log_recording_diagnostics(samples: list[float], *, sample_rate: int, channe
         )
 
 
+def _describe_sounddevice_import_failure(error: Exception, *, action: str = "Local microphone capture") -> str:
+    """Builds the `VoiceCaptureError` message for a failed `import sounddevice`, and logs the
+    real exception first. This used to be a single hardcoded "sounddevice not installed"
+    message regardless of what actually went wrong -- the same class of bug already found
+    once in this codebase (SpeechBrain's "Speaker embedding failed." masking a Windows
+    symlink-privilege error): a broad `except Exception` reporting one guessed cause instead
+    of the real one. `sounddevice` can fail to import for reasons other than "not installed"
+    -- most commonly a missing PortAudio native library even when the Python package itself
+    is present -- so this distinguishes "genuinely not installed" (an actionable `pip
+    install` fix) from any other import-time failure (which needs its own logged
+    traceback to diagnose, not a guess)."""
+    logger.exception("%s unavailable: importing 'sounddevice' failed.", action)
+    if isinstance(error, ModuleNotFoundError) and getattr(error, "name", None) == "sounddevice":
+        return (
+            f"{action} is unavailable: the 'sounddevice' package is not installed in this "
+            "Python environment. Run 'pip install -r requirements.txt' in the virtual "
+            "environment JARVIS is running in, then try again."
+        )
+    return (
+        f"{action} is unavailable: importing 'sounddevice' failed with "
+        f"{type(error).__name__}: {error}. This can happen even when the package is "
+        "installed (for example, a missing PortAudio native library) -- see "
+        "logs/jarvis.log for the full traceback."
+    )
+
+
 def record_from_microphone(duration_seconds: float, *, sample_rate: int = VOICE_SAMPLE_RATE_HZ) -> list[float]:
     """Local PC push-to-talk capture. Sets the visible mic-active indicator for exactly the
     duration audio is actively being captured, per RFC-009's 'Visible state' requirement --
@@ -298,7 +324,7 @@ def record_from_microphone(duration_seconds: float, *, sample_rate: int = VOICE_
     try:
         import sounddevice as sd  # noqa: F401  (import-availability probe)
     except Exception as error:
-        raise VoiceCaptureError("Local microphone capture is unavailable (sounddevice not installed).") from error
+        raise VoiceCaptureError(_describe_sounddevice_import_failure(error)) from error
 
     device, native_sample_rate, channels = _input_device_settings()
     frame_count = int(duration_seconds * native_sample_rate)
@@ -351,7 +377,7 @@ def play_audio_wav(wav_bytes: bytes) -> None:
     try:
         import sounddevice as sd
     except Exception as error:
-        raise VoiceCaptureError("Local speaker playback is unavailable (sounddevice not installed).") from error
+        raise VoiceCaptureError(_describe_sounddevice_import_failure(error, action="Local speaker playback")) from error
     try:
         with wave.open(io.BytesIO(wav_bytes), "rb") as wav_file:
             frames = wav_file.readframes(wav_file.getnframes())

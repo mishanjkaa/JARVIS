@@ -390,6 +390,53 @@ class VoiceRuntimeTests(unittest.TestCase):
                 audio_io.record_from_microphone(1.0)
         self.assertIn("device 12", str(context.exception))
 
+    # --- distinguishing "not installed" from other sounddevice import failures --------
+
+    def test_record_from_microphone_reports_not_installed_when_module_missing(self) -> None:
+        # Regression test for the same class of bug already found once in this codebase
+        # (SpeechBrain's "Speaker embedding failed." masking a Windows symlink-privilege
+        # error): a broad `except Exception` around `import sounddevice` used to report a
+        # single hardcoded "not installed" message no matter what actually failed. A real
+        # ModuleNotFoundError for the package itself must still get the actionable
+        # `pip install` message.
+        import sys
+
+        from app.brain.voice import audio_io
+        from app.brain.voice.errors import VoiceCaptureError
+
+        with patch.dict(sys.modules, {"sounddevice": None}):
+            with self.assertRaises(VoiceCaptureError) as context:
+                audio_io.record_from_microphone(1.0)
+        message = str(context.exception)
+        self.assertIn("not installed", message)
+        self.assertIn("pip install", message)
+
+    def test_record_from_microphone_reports_real_error_for_non_missing_import_failure(self) -> None:
+        # A `sounddevice` import can fail for reasons other than "package not installed" --
+        # most commonly a missing PortAudio native library even when the package itself is
+        # present. That real exception must be surfaced (and logged), not papered over with
+        # the same "not installed" wording, which would send someone straight to a `pip
+        # install` that can't fix the actual problem.
+        import builtins
+
+        from app.brain.voice import audio_io
+        from app.brain.voice.errors import VoiceCaptureError
+
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "sounddevice":
+                raise OSError("PortAudio library not found")
+            return real_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=fake_import):
+            with self.assertRaises(VoiceCaptureError) as context:
+                audio_io.record_from_microphone(1.0)
+        message = str(context.exception)
+        self.assertNotIn("not installed", message)
+        self.assertIn("PortAudio library not found", message)
+        self.assertIn("jarvis.log", message)
+
 
 class VoiceRecordingDiagnosticsTests(unittest.TestCase):
     """RFC-009 instability investigation: real-hardware logs showed `voice talk` similarity
