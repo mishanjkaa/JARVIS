@@ -28,7 +28,9 @@ from app.brain.intelligence.models import DynamicPlan, DynamicPlanStep, GoalEval
 from app.brain.intelligence.plan_validator import validate_dynamic_plan
 from app.brain.intelligence.task_interpreter import interpret_task
 from app.brain.intent.models import ConfidenceCategory
-from app.brain.planner.approval import has_active_pending_approval
+from app.brain.planner.approval import has_active_pending_approval, store_pending_plan
+from app.brain.planner.plan_models import AgentPlan, AgentStep
+from app.brain.planner.state import get_planner_state, reset_planner_now_provider, reset_planner_state, set_planner_now_provider
 from app.brain.risk.analyzer import analyze_plan
 from app.brain.risk.models import RiskLevel
 from app.brain.router import route_command
@@ -37,11 +39,12 @@ from app.brain.tools.registry import ToolRegistry
 from app.brain.vision.controller import get_vision_controller, reset_vision_controller
 from app.brain.vision.errors import VisionEvidenceExpiredError, VisionProviderError, VisionProviderUnavailableError
 from app.brain.vision.image_loader import cleanup_loaded_image, crop_loaded_image, load_local_image
-from app.brain.vision.models import VisionBoundingBox, VisionCropObservation, VisionEvidence, VisionFrame, VisionObservedObject, VisionOcrBlock, VisionProviderStatus, VisionRegion
+from app.brain.vision.models import BrowserCaptureRecord, VisionBoundingBox, VisionCropObservation, VisionEvidence, VisionFrame, VisionObservedObject, VisionOcrBlock, VisionProviderStatus, VisionRegion
 from app.brain.vision.ollama_provider import OllamaVisionProvider
 from app.brain.vision.state import get_vision_state, reset_vision_state
 from tests.fixtures.generate_vision_fixture import FIXTURE_TEXT, HEIGHT as FIXTURE_HEIGHT, WIDTH as FIXTURE_WIDTH
 from tests.test_browser_runtime import _FakeBrowserBackend, _PageFixture
+from tests.test_intelligence_runtime import _FakePlannerClock
 
 
 class _StaticPlannerProvider:
@@ -1944,6 +1947,69 @@ class VisionRuntimeTests(unittest.TestCase):
         self.assertFalse(evidence.success)
         self.assertEqual(evidence.error_category, "policy")
         self.assertIn("stale", evidence.error_reason.lower())
+
+    def test_approval_expiration_cleans_up_vision_captures_for_the_cancelled_task(self) -> None:
+        # Regression test: approval-expiration is a second, separate "cancel a
+        # pending-approval task" path (app.brain.planner.approval._synchronize_terminal_
+        # pending_state_locked) from AgentController.cancel_pending_or_running_task(). Only
+        # the latter used to clean up temporary vision captures for the cancelled task;
+        # letting approval simply time out left any captures owned by that task stranded
+        # past RFC-007B's "approval expiration before reuse" cleanup point.
+        reset_planner_state()
+        clock = _FakePlannerClock()
+        set_planner_now_provider(clock.now)
+        try:
+            plan = AgentPlan(steps=[
+                AgentStep(
+                    step_id=1,
+                    tool_name="memory.remember",
+                    arguments={"key": "project", "value": "JARVIS"},
+                    risk_level="persistent_write",
+                    user_visible_description="Remember project.",
+                ),
+            ])
+            summary = store_pending_plan(plan)
+            self.assertIn("Pending plan:", summary)
+            task = get_agent_runtime_state().current_task
+            self.assertIsNotNone(task)
+            self.assertEqual(task.state.value, "pending_approval")
+            task_id = task.task_id
+
+            # No plan step executes before approval, so a capture "for this task" has to be
+            # simulated directly against vision state rather than produced by real execution.
+            now = datetime.now(timezone.utc)
+            capture = BrowserCaptureRecord(
+                capture_id="capture-approval-expiry-test",
+                owner_request_id=None,
+                owner_agent_task_id=task_id,
+                source_type="browser_viewport",
+                session_id="session-1",
+                tab_id="tab-1",
+                url="https://example.com",
+                origin="https://example.com",
+                page_version=1,
+                viewport_width=800,
+                viewport_height=600,
+                captured_at=now.isoformat(),
+                expires_at=(now + timedelta(minutes=5)).isoformat(),
+                image_format="png",
+                source_hash="deadbeef",
+                byte_size=123,
+                mime_type="image/png",
+                safe_display_name="browser-capture-approval-expiry-test.png",
+            )
+            state = get_vision_state()
+            with state.lock:
+                state.captures[capture.capture_id] = capture
+
+            clock.advance(seconds=61)
+            expired = route_command("approve plan")
+            self.assertEqual(expired, "The pending plan expired.")
+
+            self.assertNotIn(capture.capture_id, get_vision_state().captures)
+        finally:
+            reset_planner_now_provider()
+            reset_planner_state()
 
     def test_browser_visual_status_and_capture_commands_expose_metadata_only(self) -> None:
         self._init_browser_backend()
