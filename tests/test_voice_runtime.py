@@ -321,3 +321,83 @@ class VoiceRuntimeTests(unittest.TestCase):
             with self.assertRaises(VoiceCaptureError) as context:
                 audio_io.record_from_microphone(1.0)
         self.assertIn("device 12", str(context.exception))
+
+
+class SpeechBrainModelLoadingTests(unittest.TestCase):
+    """Regression coverage for a real Windows bug found via voice enroll's own traceback
+    logging: SpeechBrain's default fetch strategy (LocalStrategy.SYMLINK) symlinks each
+    downloaded model file into `savedir`, and `dst.symlink_to(src)` raises `OSError:
+    [WinError 1314] A required privilege is not held by the client` on a plain Windows
+    account (no Developer Mode, not running as administrator) -- with well-formed mono
+    16 kHz float32 audio already confirmed reaching this point, so this was never an audio
+    problem. speechbrain/torch are stubbed via sys.modules rather than requiring the real
+    (heavy) packages, matching the audio backend already being optional for this suite."""
+
+    def test_classifier_instance_uses_copy_skip_cache_not_symlink(self) -> None:
+        import sys
+        import types
+
+        from app.brain.voice.verification import SpeechBrainVerificationProvider
+
+        class _FakeLocalStrategy:
+            SYMLINK = "SYMLINK"
+            COPY = "COPY"
+            COPY_SKIP_CACHE = "COPY_SKIP_CACHE"
+            NO_LINK = "NO_LINK"
+
+        fake_fetching_module = types.ModuleType("speechbrain.utils.fetching")
+        fake_fetching_module.LocalStrategy = _FakeLocalStrategy
+
+        captured_kwargs: dict = {}
+
+        class _FakeEncoderClassifier:
+            @classmethod
+            def from_hparams(cls, **kwargs):
+                captured_kwargs.update(kwargs)
+                return object()
+
+        fake_speaker_module = types.ModuleType("speechbrain.inference.speaker")
+        fake_speaker_module.EncoderClassifier = _FakeEncoderClassifier
+
+        with patch.dict(sys.modules, {
+            "speechbrain.inference.speaker": fake_speaker_module,
+            "speechbrain.utils.fetching": fake_fetching_module,
+        }):
+            provider = SpeechBrainVerificationProvider(download_dir="unused-for-this-test")
+            provider._classifier_instance()
+
+        self.assertEqual(captured_kwargs.get("local_strategy"), _FakeLocalStrategy.COPY_SKIP_CACHE)
+        self.assertNotEqual(captured_kwargs.get("local_strategy"), _FakeLocalStrategy.SYMLINK)
+
+    def test_clear_broken_symlinks_removes_only_dangling_entries(self) -> None:
+        from app.brain.voice.verification import _clear_broken_symlinks
+
+        temp_root = Path.cwd() / ".tmp-tests"
+        temp_root.mkdir(exist_ok=True)
+        directory = temp_root / f"models-{uuid4().hex}"
+        directory.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(lambda: __import__("shutil").rmtree(directory, ignore_errors=True))
+
+        real_file = directory / "real.txt"
+        real_file.write_text("data", encoding="utf-8")
+        working_link_target = directory / "real.txt"
+        working_link = directory / "working_link"
+        working_link.symlink_to(working_link_target)
+        broken_link = directory / "broken_link"
+        broken_link.symlink_to(directory / "does-not-exist.txt")
+        self.assertTrue(broken_link.is_symlink())
+        self.assertFalse(broken_link.exists())  # dangling: target doesn't resolve
+
+        _clear_broken_symlinks(str(directory))
+
+        self.assertTrue(real_file.exists())
+        self.assertTrue(working_link.is_symlink())
+        self.assertFalse(broken_link.is_symlink())
+        self.assertFalse(broken_link.exists())
+
+    def test_clear_broken_symlinks_on_missing_directory_is_a_noop(self) -> None:
+        from app.brain.voice.verification import _clear_broken_symlinks
+
+        # Must not raise even though the directory doesn't exist yet (e.g. first-ever run,
+        # before anything has attempted to download the model).
+        _clear_broken_symlinks(str(Path.cwd() / ".tmp-tests" / f"missing-{uuid4().hex}"))

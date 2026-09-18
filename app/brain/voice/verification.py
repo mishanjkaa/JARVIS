@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import math
+from pathlib import Path
 
 from app.brain.voice.errors import VoiceProviderError
 
@@ -14,6 +15,28 @@ VOICE_SAMPLE_RATE_HZ = 16000
 # SpeechBrainVerificationProvider methods, not at module import time, so importing this
 # module (or constructing a fake VerificationProvider for tests) never pays that cost.
 _DEFAULT_MODEL_SOURCE = "speechbrain/spkrec-ecapa-voxceleb"
+
+
+def _clear_broken_symlinks(directory: str) -> None:
+    """Remove any dangling symlink left behind in `directory` by an earlier model-loading
+    attempt that used SpeechBrain's default `LocalStrategy.SYMLINK` and failed partway
+    through -- e.g. Windows raising WinError 1314 ("A required privilege is not held by the
+    client") for `dst.symlink_to(src)` on a plain account with neither Developer Mode nor
+    administrator rights. `LocalStrategy.COPY_SKIP_CACHE` (used below) never creates a
+    symlink itself, but a stale broken one left over from a *previous* run, at the exact
+    path a fresh download needs to write to, could otherwise still be sitting there. A real
+    file, a working symlink, or a missing directory are all left untouched -- this only ever
+    removes an entry that is a symlink AND does not resolve to anything."""
+    path = Path(directory)
+    if not path.is_dir():
+        return
+    for entry in path.iterdir():
+        if entry.is_symlink() and not entry.exists():
+            try:
+                entry.unlink()
+                logger.info("Removed a dangling symlink left over from a previous model-loading attempt: %s", entry)
+            except OSError:
+                logger.exception("Could not remove dangling symlink %s", entry)
 
 
 class VerificationProvider:
@@ -31,21 +54,29 @@ class SpeechBrainVerificationProvider(VerificationProvider):
         if self._classifier is None:
             try:
                 from speechbrain.inference.speaker import EncoderClassifier
+                from speechbrain.utils.fetching import LocalStrategy
             except Exception as error:
                 logger.exception("Could not import speechbrain.inference.speaker.EncoderClassifier.")
                 raise VoiceProviderError("The speaker-verification model could not be loaded.") from error
-            # DIAGNOSTIC (RFC-009 mic-pipeline investigation): from_hparams() was previously
-            # called *outside* any try/except in this method -- only the import line above
-            # was guarded. On first use it downloads the model from Hugging Face Hub, so any
-            # failure here (network/proxy block, Hub outage, a Windows symlink/cache-
-            # permission issue inside huggingface_hub, a corrupted partial download) escaped
-            # this function entirely and was caught by embed()'s own broad `except Exception`
-            # below, which reported it as the exact same generic "Speaker embedding failed."
-            # message a bad *audio* tensor would produce. Wrapping it here, with its own
-            # distinct message and a full logged traceback, is what lets model-loading
-            # failures be told apart from an audio-format/content problem in encode_batch.
+            # Root cause found via the diagnostic logging below (RFC-009 mic-pipeline
+            # investigation): SpeechBrain's `fetch()` defaults to `LocalStrategy.SYMLINK`,
+            # which symlinks each downloaded model file from Hugging Face's local cache into
+            # `savedir`. On a plain Windows account (no Developer Mode, not running as
+            # administrator) `dst.symlink_to(src)` raises `OSError: [WinError 1314] A
+            # required privilege is not held by the client` -- confirmed from a real
+            # `voice enroll` traceback, with well-formed mono 16 kHz float32 audio already
+            # having reached this point (has_nan=False, has_inf=False, real signal), so the
+            # audio pipeline was never the problem. `LocalStrategy.COPY_SKIP_CACHE` downloads
+            # straight into `savedir` as a normal file via `huggingface_hub`'s own
+            # `local_dir=` download path, which never creates a symlink -- no Developer Mode,
+            # no administrator rights, and no change to Windows' security settings needed.
+            _clear_broken_symlinks(self.download_dir)
             try:
-                self._classifier = EncoderClassifier.from_hparams(source=self.model_source, savedir=self.download_dir)
+                self._classifier = EncoderClassifier.from_hparams(
+                    source=self.model_source,
+                    savedir=self.download_dir,
+                    local_strategy=LocalStrategy.COPY_SKIP_CACHE,
+                )
             except Exception as error:
                 logger.exception(
                     "Could not download/load the speaker-verification model '%s' into '%s'.",
