@@ -1,0 +1,20 @@
+{
+  "plugin_id": "example_plugin",
+  "display_name": "Example Plugin",
+  "version": "1.0.0",
+  "minimum_jarvis_version": "2.5.0",
+  "tools": ["example_plugin.echo"],
+  "risk_levels": {"example_plugin.echo": "read_only"}
+}{
+  "plugin_id": "example_plugin",
+  "display_name": "Example Plugin",
+  "version": "1.0.0",
+  "min_jarvis_version": "2.5.0",
+  "tools": [
+    {
+      "name": "example.echo",
+      "description": "Echo a short validated string."
+    }
+  ],
+  "risk_levels": ["read_only"]
+}

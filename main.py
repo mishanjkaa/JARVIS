@@ -1,0 +1,46 @@
+import logging
+
+from app.brain.brain import think
+from app.brain.logging_setup import initialize_logging
+from config.settings import APP_NAME, VERSION
+
+
+def start_jarvis() -> None:
+    initialize_logging()
+    logger = logging.getLogger(__name__)
+    logger.info("Application startup")
+
+    print("=" * 50)
+    print(APP_NAME)
+    print(f"Version: {VERSION}")
+    print("Status: ONLINE")
+    print("=" * 50)
+
+    try:
+        while True:
+            command = input("\nYou: ").strip()
+
+            if not command:
+                print("JARVIS: Please enter a command.")
+                continue
+
+            response = think(command)
+
+            if response == "shutdown":
+                print("JARVIS: Shutdown...")
+                break
+
+            print(f"JARVIS: {response}")
+    except KeyboardInterrupt:
+        print("\nJARVIS: Shutdown...")
+    finally:
+        logging_shutdown()
+
+
+def logging_shutdown() -> None:
+    logger = logging.getLogger(__name__)
+    logger.info("Application shutdown")
+
+
+if __name__ == "__main__":
+    start_jarvis()

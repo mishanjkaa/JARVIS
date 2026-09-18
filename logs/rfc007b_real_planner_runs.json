@@ -1,0 +1,755 @@
+[
+  {
+    "run": 1,
+    "valid": true,
+    "reason": "",
+    "tools": [
+      "browser.start_session",
+      "browser.open_url",
+      "browser.capture_view",
+      "vision.describe_browser_capture",
+      "browser.close_session"
+    ],
+    "steps": [
+      {
+        "tool": "browser.start_session",
+        "arguments": {
+          "headless": false
+        },
+        "depends_on": []
+      },
+      {
+        "tool": "browser.open_url",
+        "arguments": {
+          "session_id": {
+            "from_step": 1,
+            "field": "session_id"
+          },
+          "url": "https://example.com",
+          "wait_until": "domcontentloaded",
+          "timeout_seconds": 30
+        },
+        "depends_on": [
+          1
+        ]
+      },
+      {
+        "tool": "browser.capture_view",
+        "arguments": {
+          "session_id": {
+            "from_step": 1,
+            "field": "session_id"
+          }
+        },
+        "depends_on": [
+          2,
+          1
+        ]
+      },
+      {
+        "tool": "vision.describe_browser_capture",
+        "arguments": {
+          "capture_id": {
+            "from_step": 3,
+            "field": "capture_id"
+          },
+          "detail_level": "normal"
+        },
+        "depends_on": [
+          3
+        ]
+      },
+      {
+        "tool": "browser.close_session",
+        "arguments": {
+          "session_id": {
+            "from_step": 1,
+            "field": "session_id"
+          }
+        },
+        "depends_on": [
+          1,
+          3
+        ]
+      }
+    ]
+  },
+  {
+    "run": 2,
+    "valid": true,
+    "reason": "",
+    "tools": [
+      "browser.start_session",
+      "browser.open_url",
+      "browser.capture_view",
+      "vision.describe_browser_capture",
+      "browser.close_session"
+    ],
+    "steps": [
+      {
+        "tool": "browser.start_session",
+        "arguments": {
+          "headless": true
+        },
+        "depends_on": []
+      },
+      {
+        "tool": "browser.open_url",
+        "arguments": {
+          "session_id": {
+            "from_step": 1,
+            "field": "session_id"
+          },
+          "url": "https://example.com",
+          "wait_until": "domcontentloaded",
+          "timeout_seconds": 30
+        },
+        "depends_on": [
+          1
+        ]
+      },
+      {
+        "tool": "browser.capture_view",
+        "arguments": {
+          "session_id": {
+            "from_step": 1,
+            "field": "session_id"
+          }
+        },
+        "depends_on": [
+          2,
+          1
+        ]
+      },
+      {
+        "tool": "vision.describe_browser_capture",
+        "arguments": {
+          "capture_id": {
+            "from_step": 3,
+            "field": "capture_id"
+          },
+          "detail_level": "normal"
+        },
+        "depends_on": [
+          3
+        ]
+      },
+      {
+        "tool": "browser.close_session",
+        "arguments": {
+          "session_id": {
+            "from_step": 1,
+            "field": "session_id"
+          }
+        },
+        "depends_on": [
+          1,
+          3
+        ]
+      }
+    ]
+  },
+  {
+    "run": 3,
+    "valid": true,
+    "reason": "",
+    "tools": [
+      "browser.start_session",
+      "browser.open_url",
+      "browser.capture_view",
+      "vision.describe_browser_capture",
+      "browser.close_session"
+    ],
+    "steps": [
+      {
+        "tool": "browser.start_session",
+        "arguments": {
+          "headless": false
+        },
+        "depends_on": []
+      },
+      {
+        "tool": "browser.open_url",
+        "arguments": {
+          "session_id": {
+            "from_step": 1,
+            "field": "session_id"
+          },
+          "url": "https://example.com",
+          "wait_until": "domcontentloaded",
+          "timeout_seconds": 30
+        },
+        "depends_on": [
+          1
+        ]
+      },
+      {
+        "tool": "browser.capture_view",
+        "arguments": {
+          "session_id": {
+            "from_step": 1,
+            "field": "session_id"
+          }
+        },
+        "depends_on": [
+          2,
+          1
+        ]
+      },
+      {
+        "tool": "vision.describe_browser_capture",
+        "arguments": {
+          "capture_id": {
+            "from_step": 3,
+            "field": "capture_id"
+          },
+          "detail_level": "normal"
+        },
+        "depends_on": [
+          3
+        ]
+      },
+      {
+        "tool": "browser.close_session",
+        "arguments": {
+          "session_id": {
+            "from_step": 1,
+            "field": "session_id"
+          }
+        },
+        "depends_on": [
+          1,
+          3
+        ]
+      }
+    ]
+  },
+  {
+    "run": 4,
+    "valid": true,
+    "reason": "",
+    "tools": [
+      "browser.start_session",
+      "browser.open_url",
+      "browser.capture_view",
+      "vision.describe_browser_capture",
+      "browser.close_session"
+    ],
+    "steps": [
+      {
+        "tool": "browser.start_session",
+        "arguments": {
+          "headless": true
+        },
+        "depends_on": []
+      },
+      {
+        "tool": "browser.open_url",
+        "arguments": {
+          "session_id": {
+            "from_step": 1,
+            "field": "session_id"
+          },
+          "url": "https://example.com",
+          "wait_until": "load",
+          "timeout_seconds": 30
+        },
+        "depends_on": [
+          1
+        ]
+      },
+      {
+        "tool": "browser.capture_view",
+        "arguments": {
+          "session_id": {
+            "from_step": 1,
+            "field": "session_id"
+          }
+        },
+        "depends_on": [
+          2,
+          1
+        ]
+      },
+      {
+        "tool": "vision.describe_browser_capture",
+        "arguments": {
+          "capture_id": {
+            "from_step": 3,
+            "field": "capture_id"
+          },
+          "detail_level": "normal"
+        },
+        "depends_on": [
+          3
+        ]
+      },
+      {
+        "tool": "browser.close_session",
+        "arguments": {
+          "session_id": {
+            "from_step": 1,
+            "field": "session_id"
+          }
+        },
+        "depends_on": [
+          1,
+          3
+        ]
+      }
+    ]
+  },
+  {
+    "run": 5,
+    "valid": true,
+    "reason": "",
+    "tools": [
+      "browser.start_session",
+      "browser.open_url",
+      "browser.capture_view",
+      "vision.describe_browser_capture",
+      "browser.close_session"
+    ],
+    "steps": [
+      {
+        "tool": "browser.start_session",
+        "arguments": {
+          "headless": false
+        },
+        "depends_on": []
+      },
+      {
+        "tool": "browser.open_url",
+        "arguments": {
+          "session_id": {
+            "from_step": 1,
+            "field": "session_id"
+          },
+          "url": "https://example.com",
+          "wait_until": "domcontentloaded",
+          "timeout_seconds": 30
+        },
+        "depends_on": [
+          1
+        ]
+      },
+      {
+        "tool": "browser.capture_view",
+        "arguments": {
+          "session_id": {
+            "from_step": 1,
+            "field": "session_id"
+          }
+        },
+        "depends_on": [
+          2,
+          1
+        ]
+      },
+      {
+        "tool": "vision.describe_browser_capture",
+        "arguments": {
+          "capture_id": {
+            "from_step": 3,
+            "field": "capture_id"
+          },
+          "detail_level": "normal"
+        },
+        "depends_on": [
+          3
+        ]
+      },
+      {
+        "tool": "browser.close_session",
+        "arguments": {
+          "session_id": {
+            "from_step": 1,
+            "field": "session_id"
+          }
+        },
+        "depends_on": [
+          1,
+          3
+        ]
+      }
+    ]
+  },
+  {
+    "run": 6,
+    "valid": true,
+    "reason": "",
+    "tools": [
+      "browser.start_session",
+      "browser.open_url",
+      "browser.capture_view",
+      "vision.describe_browser_capture",
+      "browser.close_session"
+    ],
+    "steps": [
+      {
+        "tool": "browser.start_session",
+        "arguments": {
+          "headless": false
+        },
+        "depends_on": []
+      },
+      {
+        "tool": "browser.open_url",
+        "arguments": {
+          "session_id": {
+            "from_step": 1,
+            "field": "session_id"
+          },
+          "url": "https://example.com",
+          "wait_until": "domcontentloaded",
+          "timeout_seconds": 30
+        },
+        "depends_on": [
+          1
+        ]
+      },
+      {
+        "tool": "browser.capture_view",
+        "arguments": {
+          "session_id": {
+            "from_step": 1,
+            "field": "session_id"
+          }
+        },
+        "depends_on": [
+          2,
+          1
+        ]
+      },
+      {
+        "tool": "vision.describe_browser_capture",
+        "arguments": {
+          "capture_id": {
+            "from_step": 3,
+            "field": "capture_id"
+          },
+          "detail_level": "normal"
+        },
+        "depends_on": [
+          3
+        ]
+      },
+      {
+        "tool": "browser.close_session",
+        "arguments": {
+          "session_id": {
+            "from_step": 1,
+            "field": "session_id"
+          }
+        },
+        "depends_on": [
+          1,
+          3
+        ]
+      }
+    ]
+  },
+  {
+    "run": 7,
+    "valid": true,
+    "reason": "",
+    "tools": [
+      "browser.start_session",
+      "browser.open_url",
+      "browser.capture_view",
+      "vision.describe_browser_capture",
+      "browser.close_session"
+    ],
+    "steps": [
+      {
+        "tool": "browser.start_session",
+        "arguments": {
+          "headless": false
+        },
+        "depends_on": []
+      },
+      {
+        "tool": "browser.open_url",
+        "arguments": {
+          "session_id": {
+            "from_step": 1,
+            "field": "session_id"
+          },
+          "url": "https://example.com",
+          "wait_until": "domcontentloaded",
+          "timeout_seconds": 30
+        },
+        "depends_on": [
+          1
+        ]
+      },
+      {
+        "tool": "browser.capture_view",
+        "arguments": {
+          "session_id": {
+            "from_step": 1,
+            "field": "session_id"
+          }
+        },
+        "depends_on": [
+          2,
+          1
+        ]
+      },
+      {
+        "tool": "vision.describe_browser_capture",
+        "arguments": {
+          "capture_id": {
+            "from_step": 3,
+            "field": "capture_id"
+          },
+          "detail_level": "normal"
+        },
+        "depends_on": [
+          3
+        ]
+      },
+      {
+        "tool": "browser.close_session",
+        "arguments": {
+          "session_id": {
+            "from_step": 1,
+            "field": "session_id"
+          }
+        },
+        "depends_on": [
+          1,
+          3
+        ]
+      }
+    ]
+  },
+  {
+    "run": 8,
+    "valid": true,
+    "reason": "",
+    "tools": [
+      "browser.start_session",
+      "browser.open_url",
+      "browser.capture_view",
+      "vision.describe_browser_capture",
+      "browser.close_session"
+    ],
+    "steps": [
+      {
+        "tool": "browser.start_session",
+        "arguments": {
+          "headless": true
+        },
+        "depends_on": []
+      },
+      {
+        "tool": "browser.open_url",
+        "arguments": {
+          "session_id": {
+            "from_step": 1,
+            "field": "session_id"
+          },
+          "url": "https://example.com",
+          "wait_until": "domcontentloaded",
+          "timeout_seconds": 30
+        },
+        "depends_on": [
+          1
+        ]
+      },
+      {
+        "tool": "browser.capture_view",
+        "arguments": {
+          "session_id": {
+            "from_step": 1,
+            "field": "session_id"
+          }
+        },
+        "depends_on": [
+          1,
+          2
+        ]
+      },
+      {
+        "tool": "vision.describe_browser_capture",
+        "arguments": {
+          "detail_level": "normal",
+          "capture_id": {
+            "from_step": 3,
+            "field": "capture_id"
+          }
+        },
+        "depends_on": [
+          2,
+          3
+        ]
+      },
+      {
+        "tool": "browser.close_session",
+        "arguments": {
+          "session_id": {
+            "from_step": 1,
+            "field": "session_id"
+          }
+        },
+        "depends_on": [
+          1,
+          3
+        ]
+      }
+    ]
+  },
+  {
+    "run": 9,
+    "valid": true,
+    "reason": "",
+    "tools": [
+      "browser.start_session",
+      "browser.open_url",
+      "browser.capture_view",
+      "vision.describe_browser_capture",
+      "browser.close_session"
+    ],
+    "steps": [
+      {
+        "tool": "browser.start_session",
+        "arguments": {
+          "headless": false
+        },
+        "depends_on": []
+      },
+      {
+        "tool": "browser.open_url",
+        "arguments": {
+          "session_id": {
+            "from_step": 1,
+            "field": "session_id"
+          },
+          "url": "https://example.com",
+          "wait_until": "domcontentloaded",
+          "timeout_seconds": 30
+        },
+        "depends_on": [
+          1
+        ]
+      },
+      {
+        "tool": "browser.capture_view",
+        "arguments": {
+          "session_id": {
+            "from_step": 1,
+            "field": "session_id"
+          }
+        },
+        "depends_on": [
+          1,
+          2
+        ]
+      },
+      {
+        "tool": "vision.describe_browser_capture",
+        "arguments": {
+          "detail_level": "normal",
+          "capture_id": {
+            "from_step": 3,
+            "field": "capture_id"
+          }
+        },
+        "depends_on": [
+          2,
+          3
+        ]
+      },
+      {
+        "tool": "browser.close_session",
+        "arguments": {
+          "session_id": {
+            "from_step": 1,
+            "field": "session_id"
+          }
+        },
+        "depends_on": [
+          1,
+          3
+        ]
+      }
+    ]
+  },
+  {
+    "run": 10,
+    "valid": true,
+    "reason": "",
+    "tools": [
+      "browser.start_session",
+      "browser.open_url",
+      "browser.capture_view",
+      "vision.describe_browser_capture",
+      "browser.close_session"
+    ],
+    "steps": [
+      {
+        "tool": "browser.start_session",
+        "arguments": {
+          "headless": true
+        },
+        "depends_on": []
+      },
+      {
+        "tool": "browser.open_url",
+        "arguments": {
+          "session_id": {
+            "from_step": 1,
+            "field": "session_id"
+          },
+          "url": "https://example.com",
+          "wait_until": "domcontentloaded",
+          "timeout_seconds": 30
+        },
+        "depends_on": [
+          1
+        ]
+      },
+      {
+        "tool": "browser.capture_view",
+        "arguments": {
+          "session_id": {
+            "from_step": 1,
+            "field": "session_id"
+          }
+        },
+        "depends_on": [
+          1,
+          2
+        ]
+      },
+      {
+        "tool": "vision.describe_browser_capture",
+        "arguments": {
+          "detail_level": "normal",
+          "capture_id": {
+            "from_step": 3,
+            "field": "capture_id"
+          }
+        },
+        "depends_on": [
+          2,
+          3
+        ]
+      },
+      {
+        "tool": "browser.close_session",
+        "arguments": {
+          "session_id": {
+            "from_step": 1,
+            "field": "session_id"
+          }
+        },
+        "depends_on": [
+          1,
+          3
+        ]
+      }
+    ]
+  }
+]
