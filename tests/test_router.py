@@ -7,6 +7,7 @@ from app.brain.configuration.runtime_config import reset_runtime_config
 from app.brain.context.history import clear_history, get_history
 from app.brain.context.state import get_context, reset_context
 from app.brain.filesystem.state import reset_filesystem_state
+from app.brain.memory.store import CATEGORY_LEARNED_PATTERN, SOURCE_AI_PROPOSED
 from app.brain.planner.state import reset_planner_state
 from app.brain.router import route_command
 
@@ -109,13 +110,36 @@ class RouterTests(unittest.TestCase):
     def test_remember_command_parses_value(self, save_memory_mock) -> None:
         save_memory_mock.return_value = "Saved memory for 'favorite_ide'."
         self.assertEqual(route_command("remember favorite_ide = VS Code"), "Saved memory for 'favorite_ide'.")
-        save_memory_mock.assert_called_once_with("favorite_ide", "VS Code")
+        save_memory_mock.assert_called_once_with("favorite_ide", "VS Code", max_entries=500)
 
     @patch("app.brain.router.recall_memory")
     def test_recall_command_parses_key(self, recall_memory_mock) -> None:
         recall_memory_mock.return_value = "VS Code"
         self.assertEqual(route_command("recall favorite_ide"), "VS Code")
         recall_memory_mock.assert_called_once_with("favorite_ide")
+
+    @patch("app.brain.router.find_similar_keys")
+    @patch("app.brain.router.recall_memory")
+    def test_recall_command_suggests_similar_keys_on_miss(self, recall_memory_mock, find_similar_keys_mock) -> None:
+        recall_memory_mock.return_value = "No memory found for 'favorite_id'."
+        find_similar_keys_mock.return_value = ["favorite_ide", "favorite_idea"]
+        result = route_command("recall favorite_id")
+        self.assertEqual(result, "No memory found for 'favorite_id'. Did you mean: favorite_ide, favorite_idea?")
+        find_similar_keys_mock.assert_called_once_with("favorite_id")
+
+    @patch("app.brain.router.find_similar_keys")
+    @patch("app.brain.router.recall_memory")
+    def test_recall_command_has_no_hint_when_no_similar_keys(self, recall_memory_mock, find_similar_keys_mock) -> None:
+        recall_memory_mock.return_value = "No memory found for 'zzz'."
+        find_similar_keys_mock.return_value = []
+        self.assertEqual(route_command("recall zzz"), "No memory found for 'zzz'.")
+
+    @patch("app.brain.router.find_similar_keys")
+    @patch("app.brain.router.recall_memory")
+    def test_recall_command_has_no_hint_on_a_hit(self, recall_memory_mock, find_similar_keys_mock) -> None:
+        recall_memory_mock.return_value = "VS Code"
+        self.assertEqual(route_command("recall favorite_ide"), "VS Code")
+        find_similar_keys_mock.assert_not_called()
 
     @patch("app.brain.router.forget_memory")
     def test_forget_command_parses_key(self, forget_memory_mock) -> None:
@@ -127,7 +151,13 @@ class RouterTests(unittest.TestCase):
     def test_memory_list_command(self, list_memories_mock) -> None:
         list_memories_mock.return_value = "favorite_ide: VS Code"
         self.assertEqual(route_command("memory list"), "favorite_ide: VS Code")
-        list_memories_mock.assert_called_once()
+        list_memories_mock.assert_called_once_with()
+
+    @patch("app.brain.router.list_memories")
+    def test_memory_list_learned_command_filters_to_learned_ai_proposed(self, list_memories_mock) -> None:
+        list_memories_mock.return_value = "pattern_x: value [learned_pattern/ai_proposed]"
+        self.assertEqual(route_command("memory list learned"), "pattern_x: value [learned_pattern/ai_proposed]")
+        list_memories_mock.assert_called_once_with(category=CATEGORY_LEARNED_PATTERN, source=SOURCE_AI_PROPOSED)
 
     def test_aliases_route_correctly(self) -> None:
         self.assertEqual(route_command("hi"), "Hello Misha. I am ready.")

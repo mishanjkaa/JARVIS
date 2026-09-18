@@ -1,5 +1,6 @@
 import unittest
 
+from app.brain.memory.memory_policy import MAX_MEMORY_READS
 from app.brain.planner.plan_models import AgentPlan, AgentStep
 from app.brain.planner.planner_v2 import create_plan_from_request
 from app.brain.planner.plan_validator import validate_plan
@@ -22,3 +23,19 @@ class PlannerV2Tests(unittest.TestCase):
         result = validate_plan(plan)
         self.assertFalse(result.valid)
         self.assertIn("dependency", result.reason.lower())
+
+    def test_accepts_plan_at_the_memory_recall_limit(self) -> None:
+        plan = AgentPlan(steps=[
+            AgentStep(step_id=index, tool_name="memory.recall", arguments={"key": f"k{index}"}, risk_level="read_only")
+            for index in range(1, MAX_MEMORY_READS + 1)
+        ])
+        self.assertEqual(validate_plan(plan).valid, True)
+
+    def test_rejects_plan_exceeding_max_memory_reads(self) -> None:
+        plan = AgentPlan(steps=[
+            AgentStep(step_id=index, tool_name="memory.recall", arguments={"key": f"k{index}"}, risk_level="read_only")
+            for index in range(1, MAX_MEMORY_READS + 2)
+        ])
+        result = validate_plan(plan)
+        self.assertFalse(result.valid)
+        self.assertIn("memory.recall", result.reason)

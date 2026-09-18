@@ -19,6 +19,9 @@ from app.brain.context.history import clear_history, get_history, record_safe_co
 from app.brain.context.state import get_context, update_context
 from app.brain.internet.web_actions import open_github, open_youtube, search_web
 from app.brain.memory.store import (
+    CATEGORY_LEARNED_PATTERN,
+    SOURCE_AI_PROPOSED,
+    find_similar_keys,
     forget_memory,
     list_memories,
     recall_memory,
@@ -206,6 +209,7 @@ Memory
 - recall <key>
 - forget <key>
 - memory list
+- memory list learned
 
 Notes
 - note <text>
@@ -263,19 +267,29 @@ Exit
             value = value.strip()
             normalized_key = key.lower().strip()
             logger.info("Recognized memory command: remember key=%s", normalized_key)
-            return save_memory(normalized_key, value)
+            max_entries = int(get_effective_runtime_config().get("memory_max_entries", 500))
+            return save_memory(normalized_key, value, max_entries=max_entries)
 
         if normalized_command.startswith("recall "):
             key = raw_command[7:].strip() if raw_command.lower().startswith("recall ") else raw_command
             normalized_key = key.lower().strip()
             logger.info("Recognized memory command: recall key=%s", normalized_key)
-            return recall_memory(normalized_key)
+            result = recall_memory(normalized_key)
+            if result == f"No memory found for '{normalized_key}'.":
+                suggestions = find_similar_keys(normalized_key)
+                if suggestions:
+                    result += " Did you mean: " + ", ".join(suggestions) + "?"
+            return result
 
         if normalized_command.startswith("forget "):
             key = raw_command[7:].strip() if raw_command.lower().startswith("forget ") else raw_command
             normalized_key = key.lower().strip()
             logger.info("Recognized memory command: forget key=%s", normalized_key)
             return forget_memory(normalized_key)
+
+        if normalized_command == "memory list learned":
+            logger.info("Recognized memory command: list learned")
+            return list_memories(category=CATEGORY_LEARNED_PATTERN, source=SOURCE_AI_PROPOSED)
 
         if normalized_command == "memory list":
             logger.info("Recognized memory command: list")

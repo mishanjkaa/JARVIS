@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from app.brain.memory.memory_policy import MAX_MEMORY_READS
 from app.brain.planner.plan_models import AgentPlan
 from app.brain.planner.result_references import is_result_reference, validate_reference
 
@@ -19,6 +20,10 @@ def validate_plan(plan: AgentPlan, max_steps: int = 5) -> PlanValidation:
         return PlanValidation(False, "Plan is invalid.")
     if len(plan.steps) > max_steps:
         return PlanValidation(False, "Plan exceeds the maximum number of steps.")
+
+    memory_read_count = sum(1 for step in plan.steps if step.tool_name == "memory.recall")
+    if memory_read_count > MAX_MEMORY_READS:
+        return PlanValidation(False, "Plan exceeds the maximum number of memory.recall steps.")
 
     seen_ids: set[int] = set()
     seen_tools: dict[int, str] = {}

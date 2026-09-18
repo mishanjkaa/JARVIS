@@ -55,6 +55,7 @@ LOW_RISK_TOOLS = {
 
 MEDIUM_RISK_TOOLS = {
     "filesystem.delete_path",
+    "memory.forget",
     "memory.remember",
     "notes.create",
     "tasks.create",

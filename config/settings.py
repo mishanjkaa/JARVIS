@@ -87,6 +87,8 @@ DEFAULT_SETTINGS = {
     "intelligence_allow_heuristic_fallback": False,
     "intelligence_fail_closed": True,
     "intelligence_max_planning_attempts": 2,
+    "memory_max_entries": 500,
+    "memory_learned_capture_enabled": True,
     "plan_approval_timeout_seconds": 60,
     "max_conversation_entries": 20,
     "max_timeline_entries": 100,

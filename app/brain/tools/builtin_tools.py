@@ -4,10 +4,18 @@ from app.brain.browser.controller import get_browser_controller
 from app.brain.computer.app_launcher import open_browser, open_calculator, open_notepad
 from app.brain.computer.folder_actions import open_known_folder
 from app.brain.computer.system_info import get_computer_name, get_disk_space, get_system_info
+from app.brain.configuration.runtime_config import get_effective_runtime_config
 from app.brain.filesystem.controller import get_filesystem_controller
 from app.brain.filesystem.errors import FilesystemError
 from app.brain.internet.web_actions import search_web
-from app.brain.memory.store import save_memory, recall_memory, list_memories
+from app.brain.memory.store import (
+    DEFAULT_CATEGORY,
+    SOURCE_AI_PROPOSED,
+    VALID_CATEGORIES,
+    forget_memory,
+    recall_memory,
+    save_memory,
+)
 from app.brain.planner.notes import add_note, list_notes
 from app.brain.planner.tasks import add_task, list_tasks
 from app.brain.skills.calculator import calculate_expression
@@ -41,10 +49,27 @@ def _handler_search(args: dict) -> ToolResult:
 
 
 def _handler_remember(args: dict) -> ToolResult:
-    schema = {"key": {"type": "text", "max_length": 80}, "value": {"type": "text", "max_length": 200}}
+    schema = {
+        "key": {"type": "text", "max_length": 80},
+        "value": {"type": "text", "max_length": 200},
+        "category": {"type": "text", "max_length": 20, "required": False},
+    }
     validated = validate_arguments(schema, args)
-    result = save_memory(validated["key"], validated["value"])
-    return _tool_result(True, "success", result, result)
+    category = validated.get("category") or DEFAULT_CATEGORY
+    category = category.strip().lower()
+    if category not in VALID_CATEGORIES:
+        return _tool_result(False, "failed", "Invalid memory category.")
+    config = get_effective_runtime_config()
+    result = save_memory(
+        validated["key"],
+        validated["value"],
+        category=category,
+        source=SOURCE_AI_PROPOSED,
+        max_entries=int(config.get("memory_max_entries", 500)),
+        learned_capture_enabled=bool(config.get("memory_learned_capture_enabled", True)),
+    )
+    success = not result.startswith(("Please provide", "Memory limit reached", "Learned-pattern memory capture is disabled"))
+    return _tool_result(success, "success" if success else "failed", result, result)
 
 
 def _handler_recall(args: dict) -> ToolResult:
@@ -52,6 +77,14 @@ def _handler_recall(args: dict) -> ToolResult:
     validated = validate_arguments(schema, args)
     result = recall_memory(validated["key"])
     return _tool_result(True, "success", result, result)
+
+
+def _handler_forget(args: dict) -> ToolResult:
+    schema = {"key": {"type": "text", "max_length": 80}}
+    validated = validate_arguments(schema, args)
+    result = forget_memory(validated["key"])
+    success = not result.startswith("Please provide")
+    return _tool_result(success, "success" if success else "failed", result, result)
 
 
 def _handler_notes_create(args: dict) -> ToolResult:
@@ -840,8 +873,9 @@ def build_builtin_tools() -> list[ToolDefinition]:
     return [
         ToolDefinition("calculator.calculate", "Calculate an expression.", {"expression": {"type": "text", "max_length": 120}}, "read_only", False, _handler_calculate, lambda result: result.display_value or result.message),
         ToolDefinition("internet.search", "Search the web.", {"query": {"type": "query"}}, "external_navigation", False, _handler_search, lambda result: result.display_value or result.message),
-        ToolDefinition("memory.remember", "Remember a value.", {"key": {"type": "text", "max_length": 80}, "value": {"type": "text", "max_length": 200}}, "persistent_write", False, _handler_remember, lambda result: result.display_value or result.message),
+        ToolDefinition("memory.remember", "Remember a value.", {"key": {"type": "text", "max_length": 80}, "value": {"type": "text", "max_length": 200}, "category": {"type": "text", "max_length": 20, "required": False}}, "persistent_write", False, _handler_remember, lambda result: result.display_value or result.message),
         ToolDefinition("memory.recall", "Recall a remembered value.", {"key": {"type": "text", "max_length": 80}}, "read_only", False, _handler_recall, lambda result: result.display_value or result.message),
+        ToolDefinition("memory.forget", "Forget a remembered value.", {"key": {"type": "text", "max_length": 80}}, "persistent_write", False, _handler_forget, lambda result: result.display_value or result.message),
         ToolDefinition("notes.create", "Create a note.", {"text": {"type": "text", "max_length": 200}}, "persistent_write", False, _handler_notes_create, lambda result: result.display_value or result.message),
         ToolDefinition("notes.list", "List notes.", {}, "read_only", False, _handler_notes_list, lambda result: result.display_value or result.message),
         ToolDefinition("tasks.create", "Create a task.", {"text": {"type": "text", "max_length": 200}}, "persistent_write", False, _handler_tasks_create, lambda result: result.display_value or result.message),

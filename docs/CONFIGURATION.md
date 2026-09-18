@@ -48,3 +48,14 @@ RFC-007A and RFC-007B keep Vision configuration separate from the text intellige
 RFC-007B browser captures remain temporary, loopback-only, and metadata-only outside the private capture store. They do not expose filesystem paths, bytes, base64, or reusable screenshot artifacts to the planner.
 
 RFC-007A and RFC-007B do not support remote image URLs, desktop capture, camera input, external image upload, or persistent Vision evidence export.
+
+## Memory
+
+RFC-008 adds a small allowlisted configuration surface for the memory store.
+
+- `memory_max_entries`
+  Soft cap on the number of distinct memory keys. New keys are rejected once this limit is reached; updates to existing keys are still allowed. Default `500`.
+- `memory_learned_capture_enabled`
+  Enables or disables writing memory entries with `category=learned_pattern`. When disabled, a `memory.remember` call requesting that category is rejected and nothing is written. Default `true`.
+
+These keys follow the same deterministic-commands-only, atomic-write path as every other configuration key; they are not written directly to `config/config.json`.

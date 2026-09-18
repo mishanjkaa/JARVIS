@@ -29,6 +29,10 @@ python -m unittest discover -s tests -p "test_*.py"
 - open desktop
 - calculate 25 * 4
 - remember project = Python
+- recall project
+- forget project
+- memory list
+- memory list learned
 - ai on
 
 ## Safety limitations

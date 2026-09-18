@@ -125,3 +125,20 @@ class RiskAnalyzerTests(unittest.TestCase):
             )
         )
         self.assertEqual(assessment.level, RiskLevel.HIGH)
+
+    def test_memory_forget_requires_same_approval_as_memory_remember(self) -> None:
+        remember_assessment = analyze_plan(
+            AgentPlan(
+                steps=[AgentStep(1, "memory.remember", {"key": "project", "value": "JARVIS"}, risk_level="persistent_write")],
+                original_request="remember project = JARVIS",
+            )
+        )
+        forget_assessment = analyze_plan(
+            AgentPlan(
+                steps=[AgentStep(1, "memory.forget", {"key": "project"}, risk_level="persistent_write")],
+                original_request="forget project",
+            )
+        )
+        self.assertEqual(remember_assessment.level, RiskLevel.MEDIUM)
+        self.assertEqual(forget_assessment.level, RiskLevel.MEDIUM)
+        self.assertEqual(remember_assessment.auto_execute, forget_assessment.auto_execute)
