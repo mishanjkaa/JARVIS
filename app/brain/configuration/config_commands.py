@@ -8,6 +8,12 @@ from app.brain.configuration.runtime_config import validate_change
 from app.brain.vision.state import invalidate_vision_readiness_cache
 from config.config_loader import get_config_path, load_config
 
+# RFC-010: location_shared_secret is a credential, not a tunable setting. It is excluded
+# from runtime_config.MUTABLE_KEYS (so it can never be set via `config set`, only by editing
+# config/config.json directly) and redacted here so `config show`/`config get` never echo it
+# back in plaintext.
+_REDACTED_CONFIG_KEYS = {"location_shared_secret"}
+
 
 def _effective_config() -> dict[str, Any]:
     return get_effective_runtime_config()
@@ -15,13 +21,15 @@ def _effective_config() -> dict[str, Any]:
 
 def config_show() -> str:
     config = _effective_config()
-    return "\n".join(f"{key}: {config[key]}" for key in sorted(config))
+    return "\n".join(f"{key}: {'<redacted>' if key in _REDACTED_CONFIG_KEYS else config[key]}" for key in sorted(config))
 
 
 def config_get(key: str) -> str:
     config = _effective_config()
     if key not in config:
         return "Configuration key not found."
+    if key in _REDACTED_CONFIG_KEYS:
+        return "<redacted>"
     return str(config[key])
 
 

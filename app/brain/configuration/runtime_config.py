@@ -32,19 +32,25 @@ MUTABLE_KEYS = {
     "vision_desktop_capture_enabled", "vision_desktop_capture_ttl_seconds",
     "vision_desktop_capture_max_bytes", "vision_desktop_capture_max_width",
     "vision_desktop_capture_max_height", "vision_desktop_capture_max_pixels",
+    # RFC-010: location_shared_secret is deliberately excluded from this allowlist. It is a
+    # credential, not a tunable setting, so it can only be set by editing config/config.json
+    # directly and is redacted (never echoed) by config_show()/config_get().
+    "location_enabled", "location_bind_host", "location_port", "location_stale_after_seconds", "osrm_base_url",
 }
 
 
 def validate_change(key: str, value: object) -> object:
     if key not in MUTABLE_KEYS:
         raise ValueError("configuration key is not allowlisted")
-    if key in {"voice_enabled", "ai_enabled", "ai_allow_conversation", "show_plan_preview", "agent_enabled", "agent_allow_persistent_actions", "filesystem_enabled", "filesystem_soft_delete", "developer_mode", "auto_execute_low_risk", "auto_execute_medium_project", "terminal_enabled", "terminal_allow_python", "terminal_allow_git_read_only", "terminal_allow_package_install_with_approval", "browser_enabled", "browser_headless_default", "browser_allow_http", "browser_screenshot_overwrite", "vision_enabled", "vision_browser_capture_enabled", "intelligence_enabled", "intelligence_require_structured_output", "intelligence_allow_goal_evaluation", "intelligence_allow_heuristic_fallback", "intelligence_fail_closed", "memory_learned_capture_enabled", "vision_desktop_capture_enabled"} and not isinstance(value, bool):
+    if key in {"voice_enabled", "ai_enabled", "ai_allow_conversation", "show_plan_preview", "agent_enabled", "agent_allow_persistent_actions", "filesystem_enabled", "filesystem_soft_delete", "developer_mode", "auto_execute_low_risk", "auto_execute_medium_project", "terminal_enabled", "terminal_allow_python", "terminal_allow_git_read_only", "terminal_allow_package_install_with_approval", "browser_enabled", "browser_headless_default", "browser_allow_http", "browser_screenshot_overwrite", "vision_enabled", "vision_browser_capture_enabled", "intelligence_enabled", "intelligence_require_structured_output", "intelligence_allow_goal_evaluation", "intelligence_allow_heuristic_fallback", "intelligence_fail_closed", "memory_learned_capture_enabled", "vision_desktop_capture_enabled", "location_enabled"} and not isinstance(value, bool):
         raise ValueError("configuration value has invalid type")
-    if key in {"ai_timeout_seconds", "ai_max_plan_steps", "agent_max_steps", "agent_result_size_limit", "filesystem_max_file_size", "filesystem_max_read_size", "filesystem_max_write_size", "terminal_timeout_seconds", "terminal_max_stdout_chars", "terminal_max_stderr_chars", "terminal_history_limit", "browser_navigation_timeout_seconds", "browser_extract_text_max_chars", "browser_max_elements", "vision_timeout_seconds", "vision_max_file_size", "vision_max_width", "vision_max_height", "vision_max_pixels", "vision_max_ocr_chars", "vision_max_regions", "vision_evidence_retention_seconds", "vision_browser_capture_ttl_seconds", "vision_browser_capture_max_bytes", "vision_browser_capture_max_width", "vision_browser_capture_max_height", "vision_browser_capture_max_pixels", "vision_browser_capture_min_candidate_width_pixels", "vision_browser_capture_min_candidate_height_pixels", "vision_browser_capture_min_candidate_area_pixels", "vision_browser_capture_verification_context_scale_percent", "vision_browser_capture_verification_context_min_width_pixels", "vision_browser_capture_verification_context_min_height_pixels", "vision_browser_capture_verification_context_max_area_percent", "intelligence_timeout_seconds", "intelligence_max_plan_steps", "intelligence_max_context_chars", "intelligence_max_recent_messages", "intelligence_max_planning_attempts", "memory_max_entries", "vision_desktop_capture_ttl_seconds", "vision_desktop_capture_max_bytes", "vision_desktop_capture_max_width", "vision_desktop_capture_max_height", "vision_desktop_capture_max_pixels"} and (not isinstance(value, int) or isinstance(value, bool) or value <= 0):
+    if key in {"ai_timeout_seconds", "ai_max_plan_steps", "agent_max_steps", "agent_result_size_limit", "filesystem_max_file_size", "filesystem_max_read_size", "filesystem_max_write_size", "terminal_timeout_seconds", "terminal_max_stdout_chars", "terminal_max_stderr_chars", "terminal_history_limit", "browser_navigation_timeout_seconds", "browser_extract_text_max_chars", "browser_max_elements", "vision_timeout_seconds", "vision_max_file_size", "vision_max_width", "vision_max_height", "vision_max_pixels", "vision_max_ocr_chars", "vision_max_regions", "vision_evidence_retention_seconds", "vision_browser_capture_ttl_seconds", "vision_browser_capture_max_bytes", "vision_browser_capture_max_width", "vision_browser_capture_max_height", "vision_browser_capture_max_pixels", "vision_browser_capture_min_candidate_width_pixels", "vision_browser_capture_min_candidate_height_pixels", "vision_browser_capture_min_candidate_area_pixels", "vision_browser_capture_verification_context_scale_percent", "vision_browser_capture_verification_context_min_width_pixels", "vision_browser_capture_verification_context_min_height_pixels", "vision_browser_capture_verification_context_max_area_percent", "intelligence_timeout_seconds", "intelligence_max_plan_steps", "intelligence_max_context_chars", "intelligence_max_recent_messages", "intelligence_max_planning_attempts", "memory_max_entries", "vision_desktop_capture_ttl_seconds", "vision_desktop_capture_max_bytes", "vision_desktop_capture_max_width", "vision_desktop_capture_max_height", "vision_desktop_capture_max_pixels", "location_port", "location_stale_after_seconds"} and (not isinstance(value, int) or isinstance(value, bool) or value <= 0):
         raise ValueError("configuration value has invalid range")
-    if key in {"assistant_name", "language", "ollama_model", "terminal_default_working_directory", "browser_backend", "vision_provider", "vision_ollama_base_url", "intelligence_provider", "intelligence_model"} and (not isinstance(value, str) or not value.strip() or len(value) > 260):
+    if key in {"assistant_name", "language", "ollama_model", "terminal_default_working_directory", "browser_backend", "vision_provider", "vision_ollama_base_url", "intelligence_provider", "intelligence_model", "osrm_base_url"} and (not isinstance(value, str) or not value.strip() or len(value) > 260):
         raise ValueError("configuration value has invalid type")
     if key == "vision_model" and (not isinstance(value, str) or len(value) > 260):
+        raise ValueError("configuration value has invalid type")
+    if key == "location_bind_host" and (not isinstance(value, str) or len(value) > 260):
         raise ValueError("configuration value has invalid type")
     return value
 _ALLOWED_KEYS = {
@@ -131,6 +137,11 @@ _ALLOWED_KEYS = {
     "vision_desktop_capture_max_width",
     "vision_desktop_capture_max_height",
     "vision_desktop_capture_max_pixels",
+    "location_enabled",
+    "location_bind_host",
+    "location_port",
+    "location_stale_after_seconds",
+    "osrm_base_url",
 }
 
 
@@ -222,6 +233,12 @@ def get_runtime_config() -> dict[str, Any]:
         "vision_desktop_capture_max_width": 3840,
         "vision_desktop_capture_max_height": 2160,
         "vision_desktop_capture_max_pixels": 8_294_400,
+        "location_enabled": False,
+        "location_bind_host": "",
+        "location_port": 8766,
+        "location_shared_secret": "",
+        "location_stale_after_seconds": 120,
+        "osrm_base_url": "http://router.project-osrm.org",
     }
 
 
@@ -250,13 +267,13 @@ def replace_runtime_config(config: dict[str, Any], *, status: str = "updated") -
 def set_runtime_config_value(key: str, value: Any) -> dict[str, Any]:
     if key not in _ALLOWED_KEYS:
         raise ValueError("key not allowlisted")
-    if key in {"assistant_name", "language", "ollama_model", "terminal_default_working_directory", "browser_backend", "vision_provider", "vision_ollama_base_url", "intelligence_provider", "intelligence_model"} and not isinstance(value, str):
+    if key in {"assistant_name", "language", "ollama_model", "terminal_default_working_directory", "browser_backend", "vision_provider", "vision_ollama_base_url", "intelligence_provider", "intelligence_model", "osrm_base_url"} and not isinstance(value, str):
         raise ValueError("invalid value")
-    if key == "vision_model" and not isinstance(value, str):
+    if key in {"vision_model", "location_bind_host"} and not isinstance(value, str):
         raise ValueError("invalid value")
-    if key in {"voice_enabled", "ai_enabled", "ai_allow_conversation", "show_plan_preview", "agent_enabled", "agent_allow_persistent_actions", "filesystem_enabled", "filesystem_soft_delete", "developer_mode", "auto_execute_low_risk", "auto_execute_medium_project", "terminal_enabled", "terminal_allow_python", "terminal_allow_git_read_only", "terminal_allow_package_install_with_approval", "browser_enabled", "browser_headless_default", "browser_allow_http", "browser_screenshot_overwrite", "vision_enabled", "vision_browser_capture_enabled", "intelligence_enabled", "intelligence_require_structured_output", "intelligence_allow_goal_evaluation", "intelligence_allow_heuristic_fallback", "intelligence_fail_closed", "memory_learned_capture_enabled", "vision_desktop_capture_enabled"} and not isinstance(value, bool):
+    if key in {"voice_enabled", "ai_enabled", "ai_allow_conversation", "show_plan_preview", "agent_enabled", "agent_allow_persistent_actions", "filesystem_enabled", "filesystem_soft_delete", "developer_mode", "auto_execute_low_risk", "auto_execute_medium_project", "terminal_enabled", "terminal_allow_python", "terminal_allow_git_read_only", "terminal_allow_package_install_with_approval", "browser_enabled", "browser_headless_default", "browser_allow_http", "browser_screenshot_overwrite", "vision_enabled", "vision_browser_capture_enabled", "intelligence_enabled", "intelligence_require_structured_output", "intelligence_allow_goal_evaluation", "intelligence_allow_heuristic_fallback", "intelligence_fail_closed", "memory_learned_capture_enabled", "vision_desktop_capture_enabled", "location_enabled"} and not isinstance(value, bool):
         raise ValueError("invalid value")
-    if key in {"ai_timeout_seconds", "ai_max_plan_steps", "agent_max_steps", "agent_result_size_limit", "filesystem_max_file_size", "filesystem_max_read_size", "filesystem_max_write_size", "terminal_timeout_seconds", "terminal_max_stdout_chars", "terminal_max_stderr_chars", "terminal_history_limit", "browser_navigation_timeout_seconds", "browser_extract_text_max_chars", "browser_max_elements", "vision_timeout_seconds", "vision_max_file_size", "vision_max_width", "vision_max_height", "vision_max_pixels", "vision_max_ocr_chars", "vision_max_regions", "vision_evidence_retention_seconds", "vision_browser_capture_ttl_seconds", "vision_browser_capture_max_bytes", "vision_browser_capture_max_width", "vision_browser_capture_max_height", "vision_browser_capture_max_pixels", "vision_browser_capture_min_candidate_width_pixels", "vision_browser_capture_min_candidate_height_pixels", "vision_browser_capture_min_candidate_area_pixels", "vision_browser_capture_verification_context_scale_percent", "vision_browser_capture_verification_context_min_width_pixels", "vision_browser_capture_verification_context_min_height_pixels", "vision_browser_capture_verification_context_max_area_percent", "intelligence_timeout_seconds", "intelligence_max_plan_steps", "intelligence_max_context_chars", "intelligence_max_recent_messages", "intelligence_max_planning_attempts", "memory_max_entries", "vision_desktop_capture_ttl_seconds", "vision_desktop_capture_max_bytes", "vision_desktop_capture_max_width", "vision_desktop_capture_max_height", "vision_desktop_capture_max_pixels"} and (not isinstance(value, int) or isinstance(value, bool) or value <= 0):
+    if key in {"ai_timeout_seconds", "ai_max_plan_steps", "agent_max_steps", "agent_result_size_limit", "filesystem_max_file_size", "filesystem_max_read_size", "filesystem_max_write_size", "terminal_timeout_seconds", "terminal_max_stdout_chars", "terminal_max_stderr_chars", "terminal_history_limit", "browser_navigation_timeout_seconds", "browser_extract_text_max_chars", "browser_max_elements", "vision_timeout_seconds", "vision_max_file_size", "vision_max_width", "vision_max_height", "vision_max_pixels", "vision_max_ocr_chars", "vision_max_regions", "vision_evidence_retention_seconds", "vision_browser_capture_ttl_seconds", "vision_browser_capture_max_bytes", "vision_browser_capture_max_width", "vision_browser_capture_max_height", "vision_browser_capture_max_pixels", "vision_browser_capture_min_candidate_width_pixels", "vision_browser_capture_min_candidate_height_pixels", "vision_browser_capture_min_candidate_area_pixels", "vision_browser_capture_verification_context_scale_percent", "vision_browser_capture_verification_context_min_width_pixels", "vision_browser_capture_verification_context_min_height_pixels", "vision_browser_capture_verification_context_max_area_percent", "intelligence_timeout_seconds", "intelligence_max_plan_steps", "intelligence_max_context_chars", "intelligence_max_recent_messages", "intelligence_max_planning_attempts", "memory_max_entries", "vision_desktop_capture_ttl_seconds", "vision_desktop_capture_max_bytes", "vision_desktop_capture_max_width", "vision_desktop_capture_max_height", "vision_desktop_capture_max_pixels", "location_port", "location_stale_after_seconds"} and (not isinstance(value, int) or isinstance(value, bool) or value <= 0):
         raise ValueError("invalid value")
     config = get_effective_runtime_config()
     config[key] = value

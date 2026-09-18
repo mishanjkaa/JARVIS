@@ -9,6 +9,7 @@ JARVIS 2.0 is a hybrid assistant that combines deterministic commands with an op
 - Safe tool registry and policy checks
 - Local Browser Runtime for policy-guarded web navigation and interaction
 - Local Vision Runtime for trusted image description, OCR, visual-element search, browser-viewport visual evidence, and one-shot desktop/window capture (Windows only)
+- Phone location and turn-by-turn navigation over a private Tailscale network, using the owner's own phone (via the Overland app) as the GPS source and OpenStreetMap/OSRM for routing
 - Existing memory, notes, tasks, calculator, and folder features remain available
 
 ## Setup
@@ -36,6 +37,8 @@ python -m unittest discover -s tests -p "test_*.py"
 - screenshot the desktop
 - screenshot window Notepad
 - desktop captures
+- location status
+- navigation status
 - ai on
 
 ## Safety limitations
@@ -46,3 +49,4 @@ python -m unittest discover -s tests -p "test_*.py"
 - Vision in RFC-007A accepts only explicitly named trusted-root image files and never uploads them to external services.
 - RFC-007B adds temporary browser viewport captures with opaque `capture_id` handles, local-only analysis, TTL cleanup, and no planner-visible screenshot paths or bytes.
 - RFC-007C adds one-shot desktop/window capture (Windows only, no new dependency), always MEDIUM risk, never auto-executed, capped at one capture per plan, with the target window's title revalidated immediately before capture to catch Windows reusing a closed window's handle.
+- RFC-010 adds phone location and turn-by-turn navigation. The location HTTP endpoint binds only to a configured Tailscale interface IP, never `0.0.0.0`, and requires a shared-secret bearer token; only the single freshest point per device is ever stored, never a history; `location.receive_overland_point` is not an AI-callable tool.

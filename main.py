@@ -1,6 +1,7 @@
 import logging
 
 from app.brain.brain import think
+from app.brain.location.server import start_location_server_if_enabled, stop_location_server
 from app.brain.logging_setup import initialize_logging
 from config.settings import APP_NAME, VERSION
 
@@ -9,6 +10,7 @@ def start_jarvis() -> None:
     initialize_logging()
     logger = logging.getLogger(__name__)
     logger.info("Application startup")
+    start_location_server_if_enabled()
 
     print("=" * 50)
     print(APP_NAME)
@@ -34,6 +36,7 @@ def start_jarvis() -> None:
     except KeyboardInterrupt:
         print("\nJARVIS: Shutdown...")
     finally:
+        stop_location_server()
         logging_shutdown()
 
 

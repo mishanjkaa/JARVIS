@@ -162,6 +162,7 @@ def _synchronize_terminal_pending_state_locked(*, status: str, message: str) -> 
         runtime_state.last_safe_status_message = "Agent state: idle."
         runtime_state.archive_current_task()
         _cleanup_vision_captures_for_task(current_task)
+        _cleanup_navigation_sessions_for_task(current_task)
     elif current_task is not None and current_task.is_terminal():
         runtime_state.last_safe_status_message = "Agent state: idle."
         runtime_state.archive_current_task()
@@ -204,3 +205,21 @@ def _cleanup_desktop_vision_captures_for_task(task) -> None:
         return
     if removed:
         record_audit_event("vision_desktop_capture_cleanup_completed", task_id=task.task_id, message=f"{removed} capture(s)")
+
+
+def _cleanup_navigation_sessions_for_task(task) -> None:
+    """RFC-010: release any navigation sessions owned by a task whose approval expired or
+    was cancelled before reuse, mirroring AgentController._cleanup_navigation_sessions_for_task.
+    This is the same class of gap that bit browser and desktop capture cleanup above: a
+    pending plan that simply times out is a separate code path from
+    AgentController.cancel_pending_or_running_task, so cleanup has to be wired in here too,
+    not only there."""
+    try:
+        from app.brain.location.controller import get_location_controller
+
+        removed = get_location_controller().cleanup_sessions_for_task(owner_agent_task_id=task.task_id)
+    except Exception:
+        record_audit_event("navigation_session_cleanup_failed", task_id=task.task_id, message="task navigation session cleanup failed")
+        return
+    if removed:
+        record_audit_event("navigation_session_cleanup_completed", task_id=task.task_id, message=f"{removed} session(s)")

@@ -8,6 +8,8 @@ from app.brain.configuration.runtime_config import get_effective_runtime_config
 from app.brain.filesystem.controller import get_filesystem_controller
 from app.brain.filesystem.errors import FilesystemError
 from app.brain.internet.web_actions import search_web
+from app.brain.location.controller import get_location_controller
+from app.brain.location.errors import LocationError
 from app.brain.memory.store import (
     DEFAULT_CATEGORY,
     SOURCE_AI_PROPOSED,
@@ -967,6 +969,72 @@ def _handler_filesystem_metadata(args: dict) -> ToolResult:
     return _filesystem_result(get_filesystem_controller().metadata, validated.get("path"))
 
 
+def _location_error_result(error: Exception) -> ToolResult:
+    return _tool_result(False, "failed", str(error))
+
+
+def _handler_location_where_am_i(args: dict) -> ToolResult:
+    try:
+        message = get_location_controller().where_am_i()
+    except LocationError as error:
+        return _location_error_result(error)
+    return _tool_result(True, "success", message, message)
+
+
+def _handler_location_distance_to(args: dict) -> ToolResult:
+    schema = {"place": {"type": "text", "max_length": 80}}
+    validated = validate_arguments(schema, args)
+    try:
+        message = get_location_controller().distance_to(validated["place"])
+    except LocationError as error:
+        return _location_error_result(error)
+    return _tool_result(True, "success", message, message)
+
+
+def _handler_location_save_place(args: dict) -> ToolResult:
+    schema = {
+        "name": {"type": "text", "max_length": 80},
+        "latitude": {"type": "number"},
+        "longitude": {"type": "number"},
+    }
+    validated = validate_arguments(schema, args)
+    try:
+        message = get_location_controller().save_place(validated["name"], float(validated["latitude"]), float(validated["longitude"]))
+    except LocationError as error:
+        return _location_error_result(error)
+    return _tool_result(True, "success", message, message)
+
+
+def _handler_navigation_start(args: dict) -> ToolResult:
+    schema = {"destination": {"type": "text", "max_length": 200}}
+    validated = validate_arguments(schema, args)
+    try:
+        message = get_location_controller().start_navigation(validated["destination"])
+    except LocationError as error:
+        return _location_error_result(error)
+    return _tool_result(True, "success", message, message)
+
+
+def _handler_navigation_get_next_instruction(args: dict) -> ToolResult:
+    schema = {"session_id": {"type": "text", "max_length": 80}}
+    validated = validate_arguments(schema, args)
+    try:
+        message = get_location_controller().get_next_instruction(validated["session_id"])
+    except LocationError as error:
+        return _location_error_result(error)
+    return _tool_result(True, "success", message, message)
+
+
+def _handler_navigation_stop(args: dict) -> ToolResult:
+    schema = {"session_id": {"type": "text", "max_length": 80}}
+    validated = validate_arguments(schema, args)
+    try:
+        message = get_location_controller().stop_navigation(validated["session_id"])
+    except LocationError as error:
+        return _location_error_result(error)
+    return _tool_result(True, "success", message, message)
+
+
 def build_builtin_tools() -> list[ToolDefinition]:
     return [
         ToolDefinition("calculator.calculate", "Calculate an expression.", {"expression": {"type": "text", "max_length": 120}}, "read_only", False, _handler_calculate, lambda result: result.display_value or result.message),
@@ -1033,6 +1101,12 @@ def build_builtin_tools() -> list[ToolDefinition]:
         ToolDefinition("vision.describe_desktop_capture", "Describe a temporary desktop capture.", {"capture_id": {"type": "text", "max_length": 80}, "detail_level": {"type": "text", "max_length": 20, "required": False}}, "read_only", False, _handler_vision_describe_desktop_capture, lambda result: result.display_value or result.message),
         ToolDefinition("vision.extract_text_from_desktop_capture", "Extract visible text from a temporary desktop capture.", {"capture_id": {"type": "text", "max_length": 80}, "language_hint": {"type": "text", "max_length": 20, "required": False}, "max_characters": {"type": "integer", "required": False}}, "read_only", False, _handler_vision_extract_text_from_desktop_capture, lambda result: result.display_value or result.message),
         ToolDefinition("vision.find_visual_element_in_desktop_capture", "Find a visually described element inside a temporary desktop capture.", {"capture_id": {"type": "text", "max_length": 80}, "query": {"type": "text", "max_length": 200}, "max_results": {"type": "integer", "required": False}}, "read_only", False, _handler_vision_find_visual_element_in_desktop_capture, lambda result: result.display_value or result.message),
+        ToolDefinition("location.where_am_i", "Reverse-geocode the freshest phone location into a human-readable answer.", {}, "external_navigation", False, _handler_location_where_am_i, lambda result: result.display_value or result.message),
+        ToolDefinition("location.distance_to", "Compute the distance from the freshest phone location to an owner-saved place.", {"place": {"type": "text", "max_length": 80}}, "read_only", False, _handler_location_distance_to, lambda result: result.display_value or result.message),
+        ToolDefinition("location.save_place", "Save a named place's coordinates for future location.distance_to/navigation.start lookups.", {"name": {"type": "text", "max_length": 80}, "latitude": {"type": "number"}, "longitude": {"type": "number"}}, "persistent_write", False, _handler_location_save_place, lambda result: result.display_value or result.message),
+        ToolDefinition("navigation.start", "Start a turn-by-turn navigation session to a destination (saved place, raw coordinates, or place name).", {"destination": {"type": "text", "max_length": 200}}, "external_navigation", False, _handler_navigation_start, lambda result: result.display_value or result.message),
+        ToolDefinition("navigation.get_next_instruction", "Recompute the next turn-by-turn instruction from the freshest phone location.", {"session_id": {"type": "text", "max_length": 80}}, "external_navigation", False, _handler_navigation_get_next_instruction, lambda result: result.display_value or result.message),
+        ToolDefinition("navigation.stop", "End an active turn-by-turn navigation session.", {"session_id": {"type": "text", "max_length": 80}}, "local_safe", False, _handler_navigation_stop, lambda result: result.display_value or result.message),
         ToolDefinition("power.request_lock", "Request lock confirmation.", {}, "sensitive", True, _handler_request_lock, lambda result: result.display_value or result.message),
         ToolDefinition("power.request_restart", "Request restart confirmation.", {}, "sensitive", True, _handler_request_restart, lambda result: result.display_value or result.message),
         ToolDefinition("power.request_shutdown", "Request shutdown confirmation.", {}, "sensitive", True, _handler_request_shutdown, lambda result: result.display_value or result.message),

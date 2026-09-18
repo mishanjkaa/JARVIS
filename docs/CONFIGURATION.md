@@ -78,3 +78,22 @@ RFC-008 adds a small allowlisted configuration surface for the memory store.
   Enables or disables writing memory entries with `category=learned_pattern`. When disabled, a `memory.remember` call requesting that category is rejected and nothing is written. Default `true`.
 
 These keys follow the same deterministic-commands-only, atomic-write path as every other configuration key; they are not written directly to `config/config.json`.
+
+## Location and Navigation
+
+RFC-010 keeps location/navigation configuration in its own `location_*`/`osrm_*` family, separate from Vision.
+
+- `location_enabled`
+  Enables or disables the Location/Navigation Runtime, including the `/location/overland` HTTP route and all `location.*`/`navigation.*` tools.
+- `location_bind_host`
+  The Tailscale interface IP the `/location/overland` route binds to. Never `0.0.0.0`/`::`. Empty (the default) means the location server does not start. Mutable via `config set`, but still independently validated at bind time: the server refuses to start with a clear error if this is empty, a wildcard address, or not an address of any interface actually present on this machine, rather than silently falling back to a public bind.
+- `location_port`
+  TCP port the `/location/overland` route listens on.
+- `location_shared_secret`
+  The bearer token Overland's "access token"/`Authorization: Bearer` field must match. Unlike every other key on this page, this one is a credential, not a tunable setting: it is deliberately excluded from the `config set` mutable-key allowlist (set it by editing `config/config.json` directly) and `config show`/`config get` redact it instead of echoing it back in plaintext.
+- `location_stale_after_seconds`
+  How old the freshest phone location can be before `location.where_am_i` appends an explicit "this location is stale" note instead of presenting it as current.
+- `osrm_base_url`
+  Base URL of the OSRM routing provider used by `navigation.start`/`navigation.get_next_instruction`. Defaults to the public OSRM demo server; point this at a self-hosted OSRM instance to remove the demo server's rate limits, without any change to the `navigation.*` tool surface.
+
+`/location/overland` is bound only to `location_bind_host`, is not reachable from `0.0.0.0`, and is not registered as an AI-callable tool — see `docs/RFC-010_PHONE_LOCATION_NAVIGATION.md` for the full security rationale.

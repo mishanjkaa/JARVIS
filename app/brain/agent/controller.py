@@ -14,6 +14,7 @@ from app.brain.agent.state import get_agent_runtime_state
 from app.brain.audit.audit_log import record_audit_event
 from app.brain.browser.controller import get_browser_controller
 from app.brain.configuration.runtime_config import get_effective_runtime_config
+from app.brain.location.controller import get_location_controller
 from app.brain.planner.plan_models import AgentPlan, AgentStep
 from app.brain.planner.plan_validator import validate_plan as validate_agent_plan
 from app.brain.planner.state import reset_planner_state
@@ -87,6 +88,7 @@ class AgentController:
             runtime_state.last_safe_status_message = task.latest_safe_status_message
             self._cleanup_browser_captures_for_task(task)
             self._cleanup_desktop_captures_for_task(task)
+            self._cleanup_navigation_sessions_for_task(task)
             reset_planner_state()
             record_audit_event("plan_cancelled", task_id=task.task_id, message="Plan cancelled before execution")
             record_audit_event("agent_cancelled", task_id=task.task_id, message="Agent task cancelled before execution")
@@ -207,6 +209,7 @@ class AgentController:
         runtime_state.last_safe_status_message = task.latest_safe_status_message
         self._cleanup_browser_captures_for_task(task)
         self._cleanup_desktop_captures_for_task(task)
+        self._cleanup_navigation_sessions_for_task(task)
         record_audit_event("agent_completed", task_id=task.task_id, message="Agent execution completed")
         return task.final_result
 
@@ -218,6 +221,7 @@ class AgentController:
         runtime_state = get_agent_runtime_state()
         self._cleanup_browser_captures_for_task(task)
         self._cleanup_desktop_captures_for_task(task)
+        self._cleanup_navigation_sessions_for_task(task)
         self._cleanup_browser_sessions(self._prior_results_from_task(task))
         if runtime_state.emergency_stop_active:
             if task.state != AgentLifecycleState.EMERGENCY_STOPPED:
@@ -244,6 +248,7 @@ class AgentController:
         runtime_state.last_safe_status_message = task.latest_safe_status_message
         self._cleanup_browser_captures_for_task(task)
         self._cleanup_desktop_captures_for_task(task)
+        self._cleanup_navigation_sessions_for_task(task)
         if task.state == AgentLifecycleState.CANCELLED:
             record_audit_event("plan_cancelled", task_id=task.task_id, message=task.failure_reason)
             record_audit_event("agent_cancelled", task_id=task.task_id, message=task.failure_reason)
@@ -261,6 +266,7 @@ class AgentController:
         runtime_state.last_safe_status_message = task.latest_safe_status_message
         self._cleanup_browser_captures_for_task(task)
         self._cleanup_desktop_captures_for_task(task)
+        self._cleanup_navigation_sessions_for_task(task)
         record_audit_event("agent_failed", task_id=task.task_id, message=task.failure_reason)
         return task.failure_reason
 
@@ -341,6 +347,15 @@ class AgentController:
             return
         if removed:
             record_audit_event("vision_desktop_capture_cleanup_completed", task_id=task.task_id, message=f"{removed} capture(s)")
+
+    def _cleanup_navigation_sessions_for_task(self, task: AgentTaskRecord) -> None:
+        try:
+            removed = get_location_controller().cleanup_sessions_for_task(owner_agent_task_id=task.task_id)
+        except Exception:
+            record_audit_event("navigation_session_cleanup_failed", task_id=task.task_id, message="task navigation session cleanup failed")
+            return
+        if removed:
+            record_audit_event("navigation_session_cleanup_completed", task_id=task.task_id, message=f"{removed} session(s)")
 
     def _validate_plan(self, plan: AgentPlan, config: dict[str, Any]) -> None:
         if not isinstance(plan, AgentPlan):

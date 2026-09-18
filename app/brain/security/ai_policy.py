@@ -7,6 +7,7 @@ PERSISTENT_WRITE_TOOLS = {
     "memory.remember", "memory.forget", "notes.create", "notes.delete", "tasks.create", "tasks.complete", "tasks.delete",
     "filesystem.create_directory", "filesystem.create_text_file", "filesystem.write_text_file", "filesystem.append_text_file",
     "filesystem.rename_path", "filesystem.copy_path", "filesystem.move_path", "filesystem.delete_path",
+    "location.save_place",
 }
 EXTERNAL_TOOLS = {"internet.search", "internet.open_youtube", "internet.open_github"}
 OPEN_TOOLS = {"computer.open_application", "computer.open_known_folder"}

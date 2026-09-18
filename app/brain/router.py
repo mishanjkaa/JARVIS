@@ -18,6 +18,7 @@ from app.brain.computer.system_info import get_computer_name, get_disk_space, ge
 from app.brain.context.history import clear_history, get_history, record_safe_command
 from app.brain.context.state import get_context, update_context
 from app.brain.internet.web_actions import open_github, open_youtube, search_web
+from app.brain.location.controller import get_location_controller
 from app.brain.memory.store import (
     CATEGORY_LEARNED_PATTERN,
     SOURCE_AI_PROPOSED,
@@ -153,6 +154,8 @@ Agent planning
 - desktop clear captures
 - vision provider status
 - vision provider check
+- location status
+- navigation status
 
 Conversation and timeline
 - conversation on
@@ -516,6 +519,12 @@ Exit
 
         if normalized_command == "desktop clear captures":
             return get_vision_controller().clear_desktop_captures()
+
+        if normalized_command == "location status":
+            return get_location_controller().location_status_message()
+
+        if normalized_command == "navigation status":
+            return get_location_controller().navigation_status_message()
 
         if normalized_command == "vision provider status":
             return get_vision_controller().provider_status_message()
