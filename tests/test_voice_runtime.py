@@ -158,6 +158,20 @@ class VoiceRuntimeTests(unittest.TestCase):
         message = get_voice_controller().forget_me()
         self.assertIn("No voice enrollment", message)
 
+    def test_enrollment_finalization_logs_similarity_diagnostics(self) -> None:
+        # Regression coverage for the "voice talk always rejects the enrolled owner"
+        # investigation: finalize_enrollment() must log a same-session self-similarity
+        # baseline (pairwise among the banked samples, and each sample vs. their average)
+        # so a later voice-talk rejection's similarity score has something concrete to be
+        # compared against.
+        with patch("app.brain.voice.controller.record_from_microphone", return_value=[0.0] * 1600):
+            with self.assertLogs("app.brain.voice.enrollment", level="INFO") as logs:
+                for _ in range(enrollment.MIN_ENROLLMENT_SAMPLES):
+                    get_voice_controller().enroll_sample()
+        joined = "\n".join(logs.output)
+        self.assertIn("pairwise_similarity", joined)
+        self.assertIn("sample_to_average_similarity", joined)
+
     # --- speaker verification gate -------------------------------------------
 
     def test_voice_turn_before_enrollment_raises(self) -> None:
@@ -193,6 +207,39 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.fake_stt.transcript = "   "
         with self.assertRaises(VoiceProviderError):
             get_voice_controller().handle_voice_turn([0.0] * 1600, route_text=lambda text: "reply")
+
+    def test_voice_verification_logs_similarity_score_and_threshold(self) -> None:
+        # Regression coverage for the "voice talk always rejects the enrolled owner"
+        # investigation: every verification attempt must log the live/enrolled embedding
+        # lengths, the enrolled sample count, the computed similarity, the configured
+        # threshold, and the accept/reject outcome -- not just silently accept or raise.
+        self._enroll_owner()
+        with self.assertLogs("app.brain.voice.controller", level="INFO") as logs:
+            get_voice_controller().handle_voice_turn([0.0] * 1600, route_text=lambda text: "reply")
+        joined = "\n".join(logs.output)
+        self.assertIn("similarity=", joined)
+        self.assertIn("threshold=", joined)
+        self.assertIn("result=accept", joined)
+
+    def test_voice_verification_logs_reject_outcome_with_score(self) -> None:
+        self._enroll_owner()
+        self.fake_verification._embedding_for = _stranger_embedding
+        with self.assertLogs("app.brain.voice.controller", level="INFO") as logs:
+            with self.assertRaises(VoiceVerificationFailedError):
+                get_voice_controller().handle_voice_turn([0.0] * 1600, route_text=lambda text: "reply")
+        joined = "\n".join(logs.output)
+        self.assertIn("result=reject", joined)
+
+    def test_voice_verification_logs_embedding_dimension_mismatch(self) -> None:
+        # A dimension mismatch makes cosine_similarity() silently return 0.0 with no other
+        # symptom; this must be surfaced explicitly rather than presented as an ordinary
+        # low-similarity rejection.
+        self._enroll_owner()
+        self.fake_verification._embedding_for = lambda _audio: [1.0, 0.0]  # enrolled profile has length 3
+        with self.assertLogs("app.brain.voice.controller", level="ERROR") as logs:
+            with self.assertRaises(VoiceVerificationFailedError):
+                get_voice_controller().handle_voice_turn([0.0] * 1600, route_text=lambda text: "reply")
+        self.assertIn("embedding-dimension mismatch", "\n".join(logs.output))
 
     def test_voice_turn_still_returns_text_reply_if_tts_fails(self) -> None:
         self._enroll_owner()
@@ -321,6 +368,34 @@ class VoiceRuntimeTests(unittest.TestCase):
             with self.assertRaises(VoiceCaptureError) as context:
                 audio_io.record_from_microphone(1.0)
         self.assertIn("device 12", str(context.exception))
+
+
+class VoiceControllerProviderCachingTests(unittest.TestCase):
+    """Regression coverage for the "voice talk always rejects the enrolled owner"
+    investigation: VoiceController.verification_provider() used to construct a brand-new
+    SpeechBrainVerificationProvider on every single call, reloading the whole ECAPA model
+    from disk before every enroll_sample()/handle_voice_turn(). It must now be built once
+    and reused. Constructing SpeechBrainVerificationProvider() itself does not import
+    speechbrain (that happens lazily inside _classifier_instance()), so this needs no real
+    or stubbed speechbrain install."""
+
+    def test_verification_provider_is_cached_not_recreated_per_call(self) -> None:
+        from app.brain.voice.controller import VoiceController
+
+        controller = VoiceController()  # no override -> exercises the real caching path
+        first = controller.verification_provider()
+        second = controller.verification_provider()
+        third = controller.verification_provider()
+        self.assertIs(first, second)
+        self.assertIs(second, third)
+
+    def test_verification_override_is_not_shadowed_by_caching(self) -> None:
+        from app.brain.voice.controller import VoiceController
+
+        override = _FakeVerificationProvider()
+        controller = VoiceController(verification_provider=override)
+        self.assertIs(controller.verification_provider(), override)
+        self.assertIs(controller.verification_provider(), override)
 
 
 class SpeechBrainModelLoadingTests(unittest.TestCase):

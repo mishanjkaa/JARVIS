@@ -7,3 +7,8 @@ __pycache__/
 *.db
 config/config.json
 .env
+
+# Voice runtime data: the enrolled owner's biometric embedding (data/voice_profile.json)
+# and the downloaded SpeechBrain ECAPA model (data/models/), plus anything else the app
+# writes to data/ at runtime. None of this belongs in version control.
+data/

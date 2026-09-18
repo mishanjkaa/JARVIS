@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Callable
 
 from app.brain.audit.audit_log import record_audit_event
@@ -13,6 +14,8 @@ from app.brain.voice.speech_to_text import DEFAULT_STT_MODEL, FasterWhisperSTTPr
 from app.brain.voice.state import get_voice_state
 from app.brain.voice.text_to_speech import PiperTTSProvider, TTSProvider
 from app.brain.voice.verification import VOICE_SAMPLE_RATE_HZ, SpeechBrainVerificationProvider, VerificationProvider, cosine_similarity
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_PUSH_TO_TALK_SECONDS = 6.0
 DEFAULT_ENROLLMENT_SAMPLE_SECONDS = 4.0
@@ -29,6 +32,16 @@ class VoiceController:
         self._stt_override = stt_provider
         self._tts_override = tts_provider
         self._verification_override = verification_provider
+        # Bug found while investigating "voice talk always rejects the enrolled owner":
+        # verification_provider() used to construct a brand-new SpeechBrainVerificationProvider
+        # (and therefore reload the whole ECAPA model from disk) on *every single*
+        # enroll_sample()/handle_voice_turn() call. SpeechBrain's Pretrained class does put
+        # the model in eval() mode with frozen params, so a fresh load is not the reason
+        # embeddings differ -- but reloading an ~80 MB model before every utterance is pure
+        # waste, and caching one instance here means enrollment and verification are
+        # provably going through the exact same loaded model object, not just "the same
+        # class constructed twice", removing that as a variable entirely.
+        self._verification_provider_instance: VerificationProvider | None = None
 
     def effective_config(self) -> dict[str, Any]:
         return get_effective_runtime_config()
@@ -48,7 +61,9 @@ class VoiceController:
     def verification_provider(self) -> VerificationProvider:
         if self._verification_override is not None:
             return self._verification_override
-        return SpeechBrainVerificationProvider()
+        if self._verification_provider_instance is None:
+            self._verification_provider_instance = SpeechBrainVerificationProvider()
+        return self._verification_provider_instance
 
     def _require_enabled(self) -> None:
         if not bool(self.effective_config().get("voice_enabled", False)):
@@ -88,9 +103,34 @@ class VoiceController:
             raise VoiceNotEnrolledError("No voice is enrolled. Run 'voice enroll' first.")
         embedding = self.verification_provider().embed(samples, VOICE_SAMPLE_RATE_HZ)
         threshold = float(self.effective_config().get("voice_verification_threshold", 0.75))
+
+        # DIAGNOSTIC ("voice talk always rejects the enrolled owner" investigation): a
+        # dimension mismatch between the live and enrolled embeddings would make
+        # cosine_similarity() silently return 0.0 with no other symptom, so it is checked
+        # and logged explicitly rather than left to fall through into an unexplained score.
+        if len(embedding) != len(profile.embedding):
+            logger.error(
+                "Voice verification embedding-dimension mismatch: live_embedding_len=%d "
+                "enrolled_embedding_len=%d. cosine_similarity() returns 0.0 (an automatic "
+                "reject) whenever lengths differ -- this points at the live and enrolled "
+                "embeddings having been produced by different model configurations, not at "
+                "a borderline similarity score.",
+                len(embedding), len(profile.embedding),
+            )
+
         similarity = cosine_similarity(embedding, profile.embedding)
+        logger.info(
+            "Voice verification: live_embedding_len=%d enrolled_embedding_len=%d "
+            "enrolled_sample_count=%d similarity=%.4f threshold=%.4f result=%s",
+            len(embedding), len(profile.embedding), profile.sample_count,
+            similarity, threshold, "accept" if similarity >= threshold else "reject",
+        )
+
         if similarity < threshold:
-            record_audit_event("voice_verification_failed", message="speaker did not match the enrolled owner")
+            record_audit_event(
+                "voice_verification_failed",
+                message=f"speaker did not match the enrolled owner (similarity={similarity:.4f}, threshold={threshold:.4f})",
+            )
             raise VoiceVerificationFailedError("This voice does not match the enrolled owner. No transcript was kept.")
 
     # --- voice turns ----------------------------------------------------------

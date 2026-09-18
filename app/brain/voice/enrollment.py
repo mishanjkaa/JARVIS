@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -8,7 +9,9 @@ from typing import Optional
 from app.brain.voice.errors import VoiceEnrollmentError
 from app.brain.voice.models import VoiceProfile
 from app.brain.voice.state import get_voice_state
-from app.brain.voice.verification import average_embeddings
+from app.brain.voice.verification import average_embeddings, cosine_similarity
+
+logger = logging.getLogger(__name__)
 
 # Closed-set, opt-in enrollment, mirroring the face-enrollment shape already established as
 # a permanent decision in docs/VISION_ROADMAP.md: one local template for the owner only, no
@@ -107,8 +110,31 @@ def finalize_enrollment(profile_file: Optional[Path] = None) -> VoiceProfile:
             )
         now = datetime.now(timezone.utc).isoformat()
         existing = load_profile(profile_file)
+        averaged = average_embeddings(embeddings)
+
+        # DIAGNOSTIC ("voice talk always rejects the enrolled owner" investigation): log a
+        # same-speaker, same-session similarity baseline right when enrollment finalizes --
+        # how similar the banked samples are to each other, and to their own average -- so a
+        # later voice-talk rejection's logged similarity score has something concrete to be
+        # compared against. If even these same-session samples score well below the
+        # configured voice_verification_threshold, that points at the threshold being
+        # miscalibrated for this embedding rather than at a live-verification bug.
+        pairwise = [
+            cosine_similarity(embeddings[i], embeddings[j])
+            for i in range(len(embeddings))
+            for j in range(i + 1, len(embeddings))
+        ]
+        to_average = [cosine_similarity(sample, averaged) for sample in embeddings]
+        logger.info(
+            "Voice enrollment finalized: %d samples, embedding_len=%d, "
+            "pairwise_similarity=%s, sample_to_average_similarity=%s",
+            len(embeddings), len(averaged),
+            ["%.4f" % value for value in pairwise],
+            ["%.4f" % value for value in to_average],
+        )
+
         profile = VoiceProfile(
-            embedding=average_embeddings(embeddings),
+            embedding=averaged,
             sample_count=len(embeddings),
             enrolled_at=existing.enrolled_at if existing is not None else now,
             updated_at=now,
