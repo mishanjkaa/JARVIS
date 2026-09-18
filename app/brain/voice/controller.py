@@ -102,21 +102,31 @@ class VoiceController:
         if profile is None:
             raise VoiceNotEnrolledError("No voice is enrolled. Run 'voice enroll' first.")
         embedding = self.verification_provider().embed(samples, VOICE_SAMPLE_RATE_HZ)
-        # RFC-009 threshold recalibration: 0.75 (the original default) rejected the real
-        # enrolled owner's own genuine voice by a hair -- confirmed from a real
-        # `voice enroll` + `voice talk` run's logged diagnostics: enrollment's own internal
-        # pairwise sample similarity was 0.50-0.67, sample-to-average similarity was
-        # 0.83-0.90, and a live genuine-owner verification attempt scored 0.7311, just under
-        # the 0.75 cutoff. speechbrain's own SpeakerRecognition.verify_batch() reference
-        # implementation for this exact spkrec-ecapa-voxceleb checkpoint defaults to
-        # threshold=0.25 -- raw (non length/score-normalized) ECAPA cosine similarities are
-        # evidently calibrated by the model's own authors well below 0.75. 0.6 sits below
-        # every genuine-match score observed on real hardware so far (margin >=0.13 to the
-        # live 0.7311 result) while staying well above the model's own 0.25 reference
-        # boundary, preserving strong separation from a different speaker. Still fully
-        # configurable via `config set voice_verification_threshold <value>` -- this default
-        # is a data-driven starting point, not a final answer for every microphone/room.
-        threshold = float(self.effective_config().get("voice_verification_threshold", 0.6))
+        # RFC-009 threshold recalibration (second pass): 0.75 (the original default) rejected
+        # the real enrolled owner's own genuine voice by a hair (live similarity 0.7311),
+        # which motivated a first recalibration down to 0.6. After that, and after fixing the
+        # actual pipeline bugs this investigation uncovered (native-format mic capture,
+        # SpeechBrain's Windows symlink-privilege crash, and -- most recently -- trimming the
+        # silence surrounding speech in every recording via `_trim_silence`), a fresh
+        # `voice enroll` under the fully-fixed pipeline produced a much more internally
+        # consistent profile (pairwise sample similarity 0.78-0.81, sample-to-average
+        # 0.91-0.94, versus the original profile's 0.50-0.67). But real `voice talk` attempts
+        # against that fresh, consistent profile still landed at 0.5883, 0.4662, and 0.2318 --
+        # i.e. genuine-owner similarity on this real microphone/room, with every mechanical
+        # cause (clipping, channel imbalance, stale enrollment, leading/trailing silence)
+        # eliminated, simply runs lower and more variably than the single 0.7311 sample that
+        # justified 0.6. 0.6 was therefore still too high for this real deployment -- not a
+        # guess this time, but the conclusion of exhausting every other explanation first.
+        # 0.4 sits below the worst *deliberate, clean* genuine attempt observed (0.4662,
+        # margin 0.066) while staying well above speechbrain's own 0.25 reference boundary for
+        # this exact spkrec-ecapa-voxceleb checkpoint, and clearly above the one attempt
+        # (0.2318) whose own diagnostics (unusually loud but a *lower* active-speech ratio
+        # than cleaner attempts) marked it as an anomalous take rather than a representative
+        # genuine sample. This still doesn't guarantee rejecting a different speaker on this
+        # specific hardware -- no impostor sample has been measured on it -- so it remains
+        # fully configurable via `config set voice_verification_threshold <value>` and worth
+        # retightening if a false-accept is ever observed, guided by the same similarity logs.
+        threshold = float(self.effective_config().get("voice_verification_threshold", 0.4))
 
         # DIAGNOSTIC ("voice talk always rejects the enrolled owner" investigation): a
         # dimension mismatch between the live and enrolled embeddings would make

@@ -96,11 +96,20 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertEqual(config["voice_input_channels"], 2)
 
     def test_voice_verification_threshold_default_is_data_driven_recalibration(self) -> None:
-        # Regression test for the recalibration itself: the original 0.75 default rejected
-        # a real enrolled owner's own genuine voice (live similarity 0.7311, logged on real
-        # hardware). The new default must stay below that observed genuine-match score.
-        self.assertEqual(get_effective_runtime_config()["voice_verification_threshold"], 0.6)
-        self.assertLess(get_effective_runtime_config()["voice_verification_threshold"], 0.7311)
+        # Regression test for the recalibration itself. First pass: the original 0.75
+        # default rejected a real enrolled owner's own genuine voice (live similarity
+        # 0.7311, logged on real hardware), which motivated 0.75 -> 0.6. Second pass, after
+        # the mic/enrollment pipeline bugs this investigation found were fixed (native
+        # capture, SpeechBrain's Windows symlink crash, silence trimming, stale enrollment
+        # vs. current pipeline): a *freshly re-enrolled* profile under the fully-fixed
+        # pipeline still saw genuine-owner live attempts land at 0.5883, 0.4662, and 0.2318
+        # -- i.e. 0.6 was still too high for this real deployment even with every mechanical
+        # cause eliminated. The default must stay below the worst *clean* genuine-match
+        # score observed (0.4662) while remaining above speechbrain's own 0.25 reference
+        # boundary for this model.
+        self.assertEqual(get_effective_runtime_config()["voice_verification_threshold"], 0.4)
+        self.assertLess(get_effective_runtime_config()["voice_verification_threshold"], 0.4662)
+        self.assertGreater(get_effective_runtime_config()["voice_verification_threshold"], 0.25)
         self.assertEqual(route_command("config set voice_verification_threshold 0.5"), "Configuration updated: voice_verification_threshold.")
         self.assertEqual(load_config()["voice_verification_threshold"], 0.5)
         reset_runtime_config()
