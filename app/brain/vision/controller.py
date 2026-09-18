@@ -15,9 +15,10 @@ from app.brain.agent.state import get_agent_runtime_state
 from app.brain.audit.audit_log import record_audit_event
 from app.brain.intelligence.vision_query import normalize_vision_query
 from app.brain.configuration.runtime_config import get_effective_runtime_config, get_runtime_config_state
-from app.brain.vision.errors import VisionDisabledError, VisionEvidenceExpiredError, VisionImageError, VisionPolicyError, VisionProviderError, VisionProviderUnavailableError
+from app.brain.vision import desktop_capture_backend
+from app.brain.vision.errors import VisionCaptureUnsupportedError, VisionDisabledError, VisionEvidenceExpiredError, VisionImageError, VisionPolicyError, VisionProviderError, VisionProviderUnavailableError
 from app.brain.vision.image_loader import bbox_to_pixel_rect, cleanup_loaded_image, crop_loaded_image, load_local_image
-from app.brain.vision.models import BrowserCaptureRecord, LoadedVisionImage, VISION_DETAIL_LEVELS, VisionBoundingBox, VisionCropObservation, VisionEvidence, VisionFrame, VisionObservedObject, VisionProviderStatus, VisionRegion
+from app.brain.vision.models import BrowserCaptureRecord, DesktopCaptureRecord, DesktopWindowListResult, LoadedVisionImage, VISION_DETAIL_LEVELS, VisionBoundingBox, VisionCropObservation, VisionEvidence, VisionFrame, VisionObservedObject, VisionProviderStatus, VisionRegion
 from app.brain.vision.ollama_provider import OllamaVisionProvider
 from app.brain.vision.provider import VisionProvider
 from app.brain.vision.state import get_vision_state
@@ -324,6 +325,143 @@ class VisionController:
             ),
         )
 
+    def list_windows(self) -> DesktopWindowListResult:
+        config = self.effective_config()
+        if not bool(config.get("vision_enabled", True)):
+            return DesktopWindowListResult(success=False, error_reason="Vision runtime is disabled.")
+        if not bool(config.get("vision_desktop_capture_enabled", True)):
+            return DesktopWindowListResult(success=False, error_reason="Desktop capture is disabled.")
+        if not desktop_capture_backend.is_supported():
+            return DesktopWindowListResult(success=False, error_reason="Desktop capture is only supported on Windows.")
+        try:
+            windows = desktop_capture_backend.list_windows()
+        except Exception:
+            return DesktopWindowListResult(success=False, error_reason="Could not list open windows.")
+        return DesktopWindowListResult(
+            success=True,
+            windows=[{"window_id": window.window_id, "title": window.title} for window in windows],
+        )
+
+    def capture_desktop_screen(self) -> DesktopCaptureRecord:
+        config = self.effective_config()
+        if not bool(config.get("vision_enabled", True)):
+            raise VisionDisabledError("Vision runtime is disabled.")
+        if not bool(config.get("vision_desktop_capture_enabled", True)):
+            raise VisionPolicyError("Desktop capture is disabled.")
+        owner_request_id, owner_agent_task_id = self._capture_owner_ids()
+        raw = desktop_capture_backend.capture_full_desktop()
+        return self._store_desktop_capture(
+            raw,
+            source_type="desktop_screen",
+            window_id=None,
+            window_title="",
+            owner_request_id=owner_request_id,
+            owner_agent_task_id=owner_agent_task_id,
+            config=config,
+        )
+
+    def capture_desktop_window(self, *, window_id: int, window_title: str) -> DesktopCaptureRecord:
+        config = self.effective_config()
+        if not bool(config.get("vision_enabled", True)):
+            raise VisionDisabledError("Vision runtime is disabled.")
+        if not bool(config.get("vision_desktop_capture_enabled", True)):
+            raise VisionPolicyError("Desktop capture is disabled.")
+        # Revalidate the target window against what the user actually approved: existence,
+        # visibility, AND title. Windows recycles HWND values after a window closes, so
+        # checking existence/visibility alone would risk silently capturing whatever new
+        # window now happens to hold that handle while still claiming to fulfill the
+        # originally-approved request.
+        current = desktop_capture_backend.find_window(window_id)
+        if current is None:
+            raise VisionImageError("The target window is no longer available.")
+        expected_title = str(window_title or "").strip()
+        if current.title.strip() != expected_title:
+            raise VisionPolicyError("The target window changed since this plan was approved.")
+        owner_request_id, owner_agent_task_id = self._capture_owner_ids()
+        raw = desktop_capture_backend.capture_window(window_id)
+        return self._store_desktop_capture(
+            raw,
+            source_type="desktop_window",
+            window_id=window_id,
+            window_title=current.title,
+            owner_request_id=owner_request_id,
+            owner_agent_task_id=owner_agent_task_id,
+            config=config,
+        )
+
+    def describe_desktop_capture(self, *, capture_id: str, detail_level: str = "normal") -> VisionEvidence:
+        if detail_level not in VISION_DETAIL_LEVELS:
+            detail_level = "normal"
+        return self._run_with_desktop_capture(
+            "describe_desktop_capture",
+            capture_id=capture_id,
+            handler=lambda image: self.provider().describe_image(image, detail_level=detail_level),
+        )
+
+    def extract_text_from_desktop_capture(
+        self,
+        *,
+        capture_id: str,
+        language_hint: str = "",
+        max_characters: int | None = None,
+    ) -> VisionEvidence:
+        config = self.effective_config()
+        char_limit = int(max_characters or config.get("vision_max_ocr_chars", 4000))
+        return self._run_with_desktop_capture(
+            "extract_text_from_desktop_capture",
+            capture_id=capture_id,
+            handler=lambda image: self.provider().extract_text(
+                image,
+                language_hint=language_hint,
+                max_characters=char_limit,
+            ),
+        )
+
+    def find_visual_element_in_desktop_capture(
+        self,
+        *,
+        capture_id: str,
+        query: str,
+        max_results: int = 3,
+    ) -> VisionEvidence:
+        limit = max(1, min(max_results, int(self.effective_config().get("vision_max_regions", 8))))
+        return self._run_with_desktop_capture(
+            "find_visual_element_in_desktop_capture",
+            capture_id=capture_id,
+            handler=lambda image: self.provider().find_visual_element(image, query=query, max_results=limit),
+        )
+
+    def desktop_captures_message(self) -> str:
+        removed = self.cleanup_expired_desktop_captures()
+        state = get_vision_state()
+        with state.lock:
+            captures = sorted(state.desktop_captures.values(), key=lambda item: item.captured_at)
+        if not captures:
+            return "No temporary desktop captures."
+        lines = []
+        if removed:
+            lines.append(f"Expired captures cleaned: {removed}")
+        lines.append("Temporary desktop captures:")
+        now = datetime.now(timezone.utc)
+        for capture in captures[:20]:
+            expired = _parse_iso(capture.expires_at) <= now
+            lines.append(
+                " | ".join(
+                    [
+                        _display_capture_id(capture.capture_id),
+                        capture.source_type,
+                        capture.window_title or "(full desktop)",
+                        f"age={_age_seconds(capture.captured_at, now)}s",
+                        "expired" if expired else "active",
+                    ]
+                )
+            )
+        return "\n".join(lines)
+
+    def clear_desktop_captures(self) -> str:
+        removed = self._remove_desktop_captures(lambda _capture: True)
+        return f"Cleared {removed} temporary desktop capture{'s' if removed != 1 else ''}."
+
     def cleanup_expired_evidence(self) -> int:
         state = get_vision_state()
         removed = 0
@@ -350,6 +488,22 @@ class VisionController:
 
     def cleanup_captures_for_task(self, *, owner_request_id: int | None = None, owner_agent_task_id: int | None = None) -> int:
         return self._remove_captures(
+            lambda capture: (
+                owner_agent_task_id is not None
+                and capture.owner_agent_task_id == owner_agent_task_id
+            )
+            or (
+                owner_request_id is not None
+                and capture.owner_request_id == owner_request_id
+            )
+        )
+
+    def cleanup_expired_desktop_captures(self) -> int:
+        now = datetime.now(timezone.utc)
+        return self._remove_desktop_captures(lambda capture: _parse_iso(capture.expires_at) <= now)
+
+    def cleanup_desktop_captures_for_task(self, *, owner_request_id: int | None = None, owner_agent_task_id: int | None = None) -> int:
+        return self._remove_desktop_captures(
             lambda capture: (
                 owner_agent_task_id is not None
                 and capture.owner_agent_task_id == owner_agent_task_id
@@ -516,6 +670,175 @@ class VisionController:
                 del state.captures[capture_id]
                 removed += 1
         return removed
+
+    def _capture_owner_ids(self) -> tuple[int | None, int | None]:
+        owner_request_id: int | None = None
+        try:
+            from app.brain.intelligence.controller import get_intelligence_controller
+
+            request = get_intelligence_controller().state.current_request
+            if request is not None:
+                owner_request_id = request.request_id
+        except Exception:
+            owner_request_id = None
+        runtime_state = get_agent_runtime_state()
+        owner_agent_task_id = runtime_state.current_task.task_id if runtime_state.current_task is not None else None
+        return owner_request_id, owner_agent_task_id
+
+    def _next_desktop_capture_id(self) -> str:
+        state = get_vision_state()
+        with state.lock:
+            capture_id = f"desktop-capture-{state.next_desktop_capture_id}-{uuid4().hex[:8]}"
+            state.next_desktop_capture_id += 1
+            return capture_id
+
+    def _remove_desktop_captures(self, predicate) -> int:
+        state = get_vision_state()
+        removed = 0
+        with state.lock:
+            for capture_id, capture in list(state.desktop_captures.items()):
+                if not predicate(capture):
+                    continue
+                del state.desktop_captures[capture_id]
+                removed += 1
+        return removed
+
+    def _store_desktop_capture(
+        self,
+        raw: desktop_capture_backend.RawCapture,
+        *,
+        source_type: str,
+        window_id: int | None,
+        window_title: str,
+        owner_request_id: int | None,
+        owner_agent_task_id: int | None,
+        config: dict[str, Any],
+    ) -> DesktopCaptureRecord:
+        max_bytes = int(config.get("vision_desktop_capture_max_bytes", 6_000_000))
+        max_width = int(config.get("vision_desktop_capture_max_width", 3840))
+        max_height = int(config.get("vision_desktop_capture_max_height", 2160))
+        max_pixels = int(config.get("vision_desktop_capture_max_pixels", 8_294_400))
+        if not isinstance(raw.image_bytes, (bytes, bytearray)) or not raw.image_bytes:
+            raise VisionImageError("Desktop capture data is invalid.")
+        if len(raw.image_bytes) > max_bytes:
+            raise VisionImageError("Desktop capture exceeds the configured size limit.")
+        if raw.width <= 0 or raw.height <= 0:
+            raise VisionImageError("Desktop capture dimensions are invalid.")
+        if raw.width > max_width or raw.height > max_height or raw.width * raw.height > max_pixels:
+            raise VisionImageError("Desktop capture exceeds the configured dimension limits.")
+        now = datetime.now(timezone.utc)
+        capture_id = self._next_desktop_capture_id()
+        digest = hashlib.sha256(bytes(raw.image_bytes)).hexdigest()
+        record = DesktopCaptureRecord(
+            capture_id=capture_id,
+            owner_request_id=owner_request_id,
+            owner_agent_task_id=owner_agent_task_id,
+            source_type=source_type,
+            window_id=window_id,
+            window_title=window_title,
+            width=int(raw.width),
+            height=int(raw.height),
+            captured_at=now.isoformat(),
+            expires_at=(now + _desktop_capture_ttl(config)).isoformat(),
+            image_format="png",
+            source_hash=digest,
+            byte_size=len(raw.image_bytes),
+            mime_type=raw.mime_type,
+            safe_display_name=f"desktop-capture-{capture_id[-8:]}.png",
+            image_bytes=bytes(raw.image_bytes),
+        )
+        state = get_vision_state()
+        with state.lock:
+            state.desktop_captures[capture_id] = record
+            state.last_safe_status = "desktop_capture_ready"
+        record_audit_event(
+            "vision_desktop_capture_created",
+            task_id=owner_agent_task_id,
+            message=f"{capture_id}:{source_type}",
+        )
+        return record
+
+    def _require_desktop_capture(self, capture_id: str) -> DesktopCaptureRecord:
+        if not isinstance(capture_id, str) or not capture_id.strip():
+            raise VisionPolicyError("Desktop capture ID is required.")
+        state = get_vision_state()
+        with state.lock:
+            capture = state.desktop_captures.get(capture_id.strip())
+        if capture is None:
+            raise VisionEvidenceExpiredError("Desktop capture is no longer available.")
+        now = datetime.now(timezone.utc)
+        if _parse_iso(capture.expires_at) <= now:
+            self.cleanup_expired_desktop_captures()
+            raise VisionEvidenceExpiredError("Desktop capture is no longer available.")
+        runtime_state = get_agent_runtime_state()
+        active_task = runtime_state.current_task
+        if capture.owner_agent_task_id is not None:
+            active_or_recent = []
+            if active_task is not None:
+                active_or_recent.append(active_task.task_id)
+            active_or_recent.extend(task.task_id for task in runtime_state.archived_tasks[-5:])
+            if capture.owner_agent_task_id not in active_or_recent:
+                raise VisionPolicyError("Desktop capture belongs to a different task.")
+        return capture
+
+    def _loaded_image_from_desktop_capture(self, capture: DesktopCaptureRecord) -> LoadedVisionImage:
+        frame = VisionFrame(
+            frame_id=f"frame-{capture.capture_id}",
+            source_type=capture.source_type,
+            safe_display_name=capture.safe_display_name,
+            source_hash=capture.source_hash,
+            mime_type=capture.mime_type,
+            width=capture.width,
+            height=capture.height,
+            created_at=capture.captured_at,
+            expires_at=capture.expires_at,
+            temporary_copy=False,
+            trust_classification="desktop_capture",
+            file_size_bytes=capture.byte_size,
+        )
+        return LoadedVisionImage(
+            frame=frame,
+            original_path="",
+            safe_display_name=capture.safe_display_name,
+            mime_type=capture.mime_type,
+            width=capture.width,
+            height=capture.height,
+            source_hash=capture.source_hash,
+            file_size_bytes=capture.byte_size,
+            image_bytes=bytes(capture.image_bytes),
+            temp_copy_path="",
+        )
+
+    def _run_with_desktop_capture(self, operation: str, *, capture_id: str, handler) -> VisionEvidence:
+        self.cleanup_expired_evidence()
+        self.cleanup_expired_desktop_captures()
+        config = self.effective_config()
+        if not bool(config.get("vision_enabled", True)):
+            return self._failure(operation, error_category="disabled", error_reason="Vision runtime is disabled.")
+        try:
+            capture = self._require_desktop_capture(capture_id)
+            image = self._loaded_image_from_desktop_capture(capture)
+            evidence = handler(image)
+            evidence = replace(evidence, instruction_trust="none", factual_credibility="unevaluated")
+            self._store_evidence(evidence)
+            record_audit_event(
+                f"vision_{operation}",
+                task_id=capture.owner_agent_task_id,
+                message=capture.capture_id,
+            )
+            return evidence
+        except VisionDisabledError as error:
+            return self._failure(operation, error_category="disabled", error_reason=str(error))
+        except VisionEvidenceExpiredError as error:
+            return self._failure(operation, error_category="expired", error_reason=str(error))
+        except VisionPolicyError as error:
+            return self._failure(operation, error_category="policy", error_reason=str(error))
+        except VisionImageError as error:
+            return self._failure(operation, error_category="image_error", error_reason=str(error))
+        except VisionProviderUnavailableError as error:
+            return self._failure(operation, error_category="provider_unavailable", error_reason=str(error))
+        except VisionProviderError as error:
+            return self._failure(operation, error_category="provider_error", error_reason=str(error))
 
     def _require_browser_capture(self, capture_id: str) -> BrowserCaptureRecord:
         if not isinstance(capture_id, str) or not capture_id.strip():
@@ -1016,6 +1339,12 @@ def _capture_ttl(config: dict[str, Any]):
     from datetime import timedelta
 
     return timedelta(seconds=int(config.get("vision_browser_capture_ttl_seconds", 180)))
+
+
+def _desktop_capture_ttl(config: dict[str, Any]):
+    from datetime import timedelta
+
+    return timedelta(seconds=int(config.get("vision_desktop_capture_ttl_seconds", 180)))
 
 
 def _parse_iso(value: str) -> datetime:

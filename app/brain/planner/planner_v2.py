@@ -34,6 +34,14 @@ _WRITE_QUOTED_PATTERN = re.compile(r'^write\s+"((?:[^"\\]|\\.)*)"\s+to\s+(.+)$',
 _WRITE_UNQUOTED_PATTERN = re.compile(r"^write\s+(.+?)\s+to\s+(.+)$", re.IGNORECASE)
 _APPEND_QUOTED_PATTERN = re.compile(r'^append\s+"((?:[^"\\]|\\.)*)"\s+to\s+(.+)$', re.IGNORECASE)
 _APPEND_UNQUOTED_PATTERN = re.compile(r"^append\s+(.+?)\s+to\s+(.+)$", re.IGNORECASE)
+_DESKTOP_SCREENSHOT_PATTERN = re.compile(
+    r"^\s*(?:take\s+a\s+|take\s+)?(?:screenshot|screen\s*shot|capture)\s+(?:of\s+)?(?:the\s+|my\s+)?(?:whole\s+|entire\s+|full\s+)?desktop\s*$",
+    re.IGNORECASE,
+)
+_DESKTOP_WINDOW_SCREENSHOT_PATTERN = re.compile(
+    r"^\s*(?:take\s+a\s+|take\s+)?(?:screenshot|screen\s*shot|capture)\s+(?:of\s+)?(?:the\s+)?window\s+(?:titled\s+|named\s+|called\s+)?['\"]?(.+?)['\"]?\s*$",
+    re.IGNORECASE,
+)
 _FORBIDDEN_TERMINAL_EXECUTABLES = {
     "bash",
     "cmd",
@@ -76,6 +84,10 @@ class PlannerV2:
         if filesystem_plan is not None:
             filesystem_plan.original_request = raw_input
             return filesystem_plan
+        desktop_capture_plan = _build_desktop_capture_plan(raw_input)
+        if desktop_capture_plan is not None:
+            desktop_capture_plan.original_request = raw_input
+            return desktop_capture_plan
         if result.intent == IntentCategory.CALCULATION:
             expression = _extract_calculation_expression(raw_input)
             return AgentPlan(steps=[
@@ -318,3 +330,68 @@ def _terminal_arguments(raw_input: str, executable: str, arguments: list[str], *
         "operation_type": operation_type,
         "raw_command": raw_input,
     }
+
+
+def _build_desktop_capture_plan(raw_input: str) -> AgentPlan | None:
+    """RFC-007C: one-shot, deterministic construction of a desktop/window capture plan.
+
+    Desktop capture is a single explicit action, not a multi-step workflow, so unlike
+    browser visual evidence (which the LLM-driven dynamic planner constructs) this is
+    handled deterministically here, matching JARVIS's deterministic-first architecture.
+    Window capture resolves the user's title text against currently open windows at
+    plan-construction time (a read-only, pre-approval lookup) so the approval preview the
+    user sees before typing "approve plan" names the real, currently-open window title,
+    not just the raw text they typed.
+    """
+    value = raw_input.strip()
+    if _DESKTOP_SCREENSHOT_PATTERN.match(value):
+        return AgentPlan(steps=[
+            AgentStep(
+                step_id=1,
+                tool_name="desktop.capture_screen",
+                arguments={},
+                risk_level="persistent_write",
+                user_visible_description="Capture a screenshot of your entire desktop.",
+            )
+        ])
+    window_match = _DESKTOP_WINDOW_SCREENSHOT_PATTERN.match(value)
+    if window_match:
+        title_hint = window_match.group(1).strip().strip("\"'")
+        if not title_hint:
+            return None
+        window = _resolve_single_window(title_hint)
+        if window is None:
+            return None
+        return AgentPlan(steps=[
+            AgentStep(
+                step_id=1,
+                tool_name="desktop.capture_window",
+                arguments={"window_id": window.window_id, "window_title": window.title},
+                risk_level="persistent_write",
+                user_visible_description=f"Capture a screenshot of the window titled '{window.title}'.",
+            )
+        ])
+    return None
+
+
+def _resolve_single_window(title_hint: str):
+    from app.brain.vision import desktop_capture_backend
+
+    if not desktop_capture_backend.is_supported():
+        return None
+    try:
+        windows = desktop_capture_backend.list_windows()
+    except Exception:
+        return None
+    normalized_hint = title_hint.strip().lower()
+    if not normalized_hint:
+        return None
+    exact_matches = [window for window in windows if window.title.strip().lower() == normalized_hint]
+    if len(exact_matches) == 1:
+        return exact_matches[0]
+    if len(exact_matches) > 1:
+        return None
+    substring_matches = [window for window in windows if normalized_hint in window.title.lower()]
+    if len(substring_matches) == 1:
+        return substring_matches[0]
+    return None

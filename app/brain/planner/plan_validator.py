@@ -5,6 +5,9 @@ from dataclasses import dataclass
 from app.brain.memory.memory_policy import MAX_MEMORY_READS
 from app.brain.planner.plan_models import AgentPlan
 from app.brain.planner.result_references import is_result_reference, validate_reference
+from app.brain.vision.desktop_capture_backend import MAX_DESKTOP_CAPTURES_PER_PLAN
+
+_DESKTOP_CAPTURE_TOOLS = {"desktop.capture_screen", "desktop.capture_window"}
 
 _BROWSER_SESSION_PRODUCERS = {"browser.start_session", "browser.get_active_session"}
 
@@ -24,6 +27,10 @@ def validate_plan(plan: AgentPlan, max_steps: int = 5) -> PlanValidation:
     memory_read_count = sum(1 for step in plan.steps if step.tool_name == "memory.recall")
     if memory_read_count > MAX_MEMORY_READS:
         return PlanValidation(False, "Plan exceeds the maximum number of memory.recall steps.")
+
+    desktop_capture_count = sum(1 for step in plan.steps if step.tool_name in _DESKTOP_CAPTURE_TOOLS)
+    if desktop_capture_count > MAX_DESKTOP_CAPTURES_PER_PLAN:
+        return PlanValidation(False, "Plan exceeds the maximum number of desktop capture steps.")
 
     seen_ids: set[int] = set()
     seen_tools: dict[int, str] = {}

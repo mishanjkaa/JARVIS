@@ -81,6 +81,44 @@ class BrowserCaptureRecord:
 
 
 @dataclass
+class DesktopCaptureRecord:
+    capture_id: str
+    owner_request_id: int | None
+    owner_agent_task_id: int | None
+    source_type: str
+    window_id: int | None
+    window_title: str
+    width: int
+    height: int
+    captured_at: str
+    expires_at: str
+    image_format: str
+    source_hash: str
+    byte_size: int
+    mime_type: str
+    safe_display_name: str
+    image_bytes: bytes = field(repr=False, default=b"")
+
+    def public_metadata(self) -> dict[str, Any]:
+        return {
+            "capture_id": self.capture_id,
+            "source_type": self.source_type,
+            "window_title": self.window_title,
+            "width": self.width,
+            "height": self.height,
+            "captured_at": self.captured_at,
+            "expires_at": self.expires_at,
+        }
+
+
+@dataclass
+class DesktopWindowListResult:
+    success: bool
+    error_reason: str = ""
+    windows: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
 class VisionFrame:
     frame_id: str
     source_type: str

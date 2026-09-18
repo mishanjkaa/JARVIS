@@ -149,6 +149,8 @@ Agent planning
 - vision browser status
 - vision captures
 - vision clear captures
+- desktop captures
+- desktop clear captures
 - vision provider status
 - vision provider check
 
@@ -508,6 +510,12 @@ Exit
 
         if normalized_command == "vision clear captures":
             return get_vision_controller().clear_browser_captures()
+
+        if normalized_command == "desktop captures":
+            return get_vision_controller().desktop_captures_message()
+
+        if normalized_command == "desktop clear captures":
+            return get_vision_controller().clear_desktop_captures()
 
         if normalized_command == "vision provider status":
             return get_vision_controller().provider_status_message()

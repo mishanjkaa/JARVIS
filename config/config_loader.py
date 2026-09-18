@@ -85,6 +85,11 @@ def load_config(path: Path | str | None = None) -> dict[str, Any]:
         "intelligence_max_recent_messages": (1, 50),
         "intelligence_max_planning_attempts": (1, 4),
         "memory_max_entries": (1, 100_000),
+        "vision_desktop_capture_ttl_seconds": (1, 3600),
+        "vision_desktop_capture_max_bytes": (1, 33_554_432),
+        "vision_desktop_capture_max_width": (1, 16_384),
+        "vision_desktop_capture_max_height": (1, 16_384),
+        "vision_desktop_capture_max_pixels": (1, 33_554_432),
     }
     for key, (minimum, maximum) in numeric_ranges.items():
         value = merged.get(key)

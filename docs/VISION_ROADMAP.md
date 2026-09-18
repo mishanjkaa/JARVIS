@@ -32,7 +32,15 @@ Browser visual evidence from temporary viewport captures of JARVIS-owned browser
 
 ## RFC-007C
 
-One-shot selected-window or desktop capture with visible consent and MEDIUM approval.
+One-shot selected-window or desktop capture with visible consent and MEDIUM approval:
+
+- `desktop.list_windows`, `desktop.capture_screen`, `desktop.capture_window`;
+- `vision.describe_desktop_capture`, `vision.extract_text_from_desktop_capture`, `vision.find_visual_element_in_desktop_capture`;
+- capture and window-capture are always MEDIUM risk, never project-scoped, never auto-executed;
+- capped at one desktop/window capture step per agent plan;
+- `desktop.capture_window` revalidates the target window's title immediately before capturing, rejecting the capture if the window has changed since plan approval;
+- no verification pipeline against DOM elements, since a desktop or window capture has no DOM;
+- Windows-only, using Pillow's `ImageGrab` and `ctypes` calls into `user32`/`dwmapi` — no new dependency.
 
 ## RFC-007D
 

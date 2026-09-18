@@ -142,3 +142,31 @@ class RiskAnalyzerTests(unittest.TestCase):
         self.assertEqual(remember_assessment.level, RiskLevel.MEDIUM)
         self.assertEqual(forget_assessment.level, RiskLevel.MEDIUM)
         self.assertEqual(remember_assessment.auto_execute, forget_assessment.auto_execute)
+
+    def test_desktop_capture_never_auto_executes_even_with_developer_mode_and_medium_project(self) -> None:
+        # RFC-007C requires MEDIUM approval for desktop/window capture, always. Unlike
+        # filesystem operations, desktop.* tools are deliberately absent from every
+        # project-scoping exemption in _is_project_scoped(), so they fall through to its
+        # catch-all `return False`. This proves that holds even when both settings that
+        # would otherwise auto-execute a MEDIUM-risk plan are enabled.
+        permissive_config = {"developer_mode": True, "auto_execute_medium_project": True}
+        screen_assessment = analyze_plan(
+            AgentPlan(
+                steps=[AgentStep(1, "desktop.capture_screen", {}, risk_level="persistent_write")],
+                original_request="screenshot the desktop",
+            ),
+            config=permissive_config,
+        )
+        window_assessment = analyze_plan(
+            AgentPlan(
+                steps=[AgentStep(1, "desktop.capture_window", {"window_id": 1, "window_title": "Notepad"}, risk_level="persistent_write")],
+                original_request="screenshot window Notepad",
+            ),
+            config=permissive_config,
+        )
+        self.assertEqual(screen_assessment.level, RiskLevel.MEDIUM)
+        self.assertFalse(screen_assessment.project_scoped)
+        self.assertFalse(screen_assessment.auto_execute)
+        self.assertEqual(window_assessment.level, RiskLevel.MEDIUM)
+        self.assertFalse(window_assessment.project_scoped)
+        self.assertFalse(window_assessment.auto_execute)

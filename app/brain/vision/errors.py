@@ -27,3 +27,7 @@ class VisionProviderError(VisionError):
 
 class VisionEvidenceExpiredError(VisionError):
     """Raised when temporary Vision evidence is no longer current."""
+
+
+class VisionCaptureUnsupportedError(VisionError):
+    """Raised when a capture operation is not supported on the current platform."""

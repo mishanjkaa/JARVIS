@@ -26,10 +26,14 @@ LOW_RISK_TOOLS = {
     "browser.wait_for_page",
     "vision.describe_image",
     "vision.describe_browser_capture",
+    "vision.describe_desktop_capture",
     "vision.extract_text",
     "vision.extract_text_from_browser_capture",
+    "vision.extract_text_from_desktop_capture",
     "vision.find_visual_element",
     "vision.find_visual_element_in_browser_capture",
+    "vision.find_visual_element_in_desktop_capture",
+    "desktop.list_windows",
     "calculator.calculate",
     "computer.open_application",
     "computer.open_known_folder",
@@ -54,6 +58,8 @@ LOW_RISK_TOOLS = {
 }
 
 MEDIUM_RISK_TOOLS = {
+    "desktop.capture_screen",
+    "desktop.capture_window",
     "filesystem.delete_path",
     "memory.forget",
     "memory.remember",

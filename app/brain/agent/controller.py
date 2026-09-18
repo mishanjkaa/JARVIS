@@ -86,6 +86,7 @@ class AgentController:
             task.latest_safe_status_message = "Pending plan cancelled."
             runtime_state.last_safe_status_message = task.latest_safe_status_message
             self._cleanup_browser_captures_for_task(task)
+            self._cleanup_desktop_captures_for_task(task)
             reset_planner_state()
             record_audit_event("plan_cancelled", task_id=task.task_id, message="Plan cancelled before execution")
             record_audit_event("agent_cancelled", task_id=task.task_id, message="Agent task cancelled before execution")
@@ -205,6 +206,7 @@ class AgentController:
         task.latest_safe_status_message = task.final_result
         runtime_state.last_safe_status_message = task.latest_safe_status_message
         self._cleanup_browser_captures_for_task(task)
+        self._cleanup_desktop_captures_for_task(task)
         record_audit_event("agent_completed", task_id=task.task_id, message="Agent execution completed")
         return task.final_result
 
@@ -215,6 +217,7 @@ class AgentController:
     def _finalize_stop(self, task: AgentTaskRecord) -> str:
         runtime_state = get_agent_runtime_state()
         self._cleanup_browser_captures_for_task(task)
+        self._cleanup_desktop_captures_for_task(task)
         self._cleanup_browser_sessions(self._prior_results_from_task(task))
         if runtime_state.emergency_stop_active:
             if task.state != AgentLifecycleState.EMERGENCY_STOPPED:
@@ -240,6 +243,7 @@ class AgentController:
         task.latest_safe_status_message = task.failure_reason
         runtime_state.last_safe_status_message = task.latest_safe_status_message
         self._cleanup_browser_captures_for_task(task)
+        self._cleanup_desktop_captures_for_task(task)
         if task.state == AgentLifecycleState.CANCELLED:
             record_audit_event("plan_cancelled", task_id=task.task_id, message=task.failure_reason)
             record_audit_event("agent_cancelled", task_id=task.task_id, message=task.failure_reason)
@@ -256,6 +260,7 @@ class AgentController:
         task.latest_safe_status_message = task.failure_reason
         runtime_state.last_safe_status_message = task.latest_safe_status_message
         self._cleanup_browser_captures_for_task(task)
+        self._cleanup_desktop_captures_for_task(task)
         record_audit_event("agent_failed", task_id=task.task_id, message=task.failure_reason)
         return task.failure_reason
 
@@ -327,6 +332,15 @@ class AgentController:
             return
         if removed:
             record_audit_event("vision_capture_cleanup_completed", task_id=task.task_id, message=f"{removed} capture(s)")
+
+    def _cleanup_desktop_captures_for_task(self, task: AgentTaskRecord) -> None:
+        try:
+            removed = get_vision_controller().cleanup_desktop_captures_for_task(owner_agent_task_id=task.task_id)
+        except Exception:
+            record_audit_event("vision_desktop_capture_cleanup_failed", task_id=task.task_id, message="task desktop capture cleanup failed")
+            return
+        if removed:
+            record_audit_event("vision_desktop_capture_cleanup_completed", task_id=task.task_id, message=f"{removed} capture(s)")
 
     def _validate_plan(self, plan: AgentPlan, config: dict[str, Any]) -> None:
         if not isinstance(plan, AgentPlan):

@@ -8,7 +8,7 @@ JARVIS 2.0 is a hybrid assistant that combines deterministic commands with an op
 - Optional local AI mode through Ollama
 - Safe tool registry and policy checks
 - Local Browser Runtime for policy-guarded web navigation and interaction
-- Local Vision Runtime for trusted image description, OCR, visual-element search, and browser-viewport visual evidence
+- Local Vision Runtime for trusted image description, OCR, visual-element search, browser-viewport visual evidence, and one-shot desktop/window capture (Windows only)
 - Existing memory, notes, tasks, calculator, and folder features remain available
 
 ## Setup
@@ -33,6 +33,9 @@ python -m unittest discover -s tests -p "test_*.py"
 - forget project
 - memory list
 - memory list learned
+- screenshot the desktop
+- screenshot window Notepad
+- desktop captures
 - ai on
 
 ## Safety limitations
@@ -42,3 +45,4 @@ python -m unittest discover -s tests -p "test_*.py"
 - Ollama is optional and not required for deterministic operation.
 - Vision in RFC-007A accepts only explicitly named trusted-root image files and never uploads them to external services.
 - RFC-007B adds temporary browser viewport captures with opaque `capture_id` handles, local-only analysis, TTL cleanup, and no planner-visible screenshot paths or bytes.
+- RFC-007C adds one-shot desktop/window capture (Windows only, no new dependency), always MEDIUM risk, never auto-executed, capped at one capture per plan, with the target window's title revalidated immediately before capture to catch Windows reusing a closed window's handle.

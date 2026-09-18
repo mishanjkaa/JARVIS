@@ -47,7 +47,26 @@ RFC-007A and RFC-007B keep Vision configuration separate from the text intellige
 
 RFC-007B browser captures remain temporary, loopback-only, and metadata-only outside the private capture store. They do not expose filesystem paths, bytes, base64, or reusable screenshot artifacts to the planner.
 
-RFC-007A and RFC-007B do not support remote image URLs, desktop capture, camera input, external image upload, or persistent Vision evidence export.
+RFC-007A and RFC-007B do not support remote image URLs, camera input, external image upload, or persistent Vision evidence export.
+
+## Desktop Capture
+
+RFC-007C keeps desktop and window capture configuration separate from browser capture, in its own `vision_desktop_capture_*` family.
+
+- `vision_desktop_capture_enabled`
+  Enables or disables RFC-007C desktop and window capture, including `desktop.list_windows`. All desktop tools additionally require `vision_enabled`. Neither listing nor capturing requires the Vision provider (Ollama) to be reachable; only analyzing a capture (`vision.describe_desktop_capture` and similar) does.
+- `vision_desktop_capture_ttl_seconds`
+  Time-to-live for opaque desktop capture records before deterministic cleanup rejects reuse.
+- `vision_desktop_capture_max_bytes`
+  Maximum temporary desktop capture size retained in memory.
+- `vision_desktop_capture_max_width`
+  Maximum allowed captured width.
+- `vision_desktop_capture_max_height`
+  Maximum allowed captured height.
+- `vision_desktop_capture_max_pixels`
+  Maximum allowed captured pixel count.
+
+Desktop and window captures remain temporary and metadata-only outside their private capture store, which is kept separate from the browser capture store. They do not expose filesystem paths, bytes, base64, or reusable screenshot artifacts to the planner. Desktop capture is one-shot only: `desktop.capture_screen` and `desktop.capture_window` are capped, combined, at `MAX_DESKTOP_CAPTURES_PER_PLAN` (currently 1) per agent plan, and both are always MEDIUM risk requiring explicit `approve plan`, never auto-executed. `desktop.capture_window` also revalidates the target window's title immediately before capturing, rejecting the capture if the window has changed since the plan was approved. RFC-007C does not support remote desktop, full-page stitching, camera input, or persistent capture export, and is only supported on Windows.
 
 ## Memory
 

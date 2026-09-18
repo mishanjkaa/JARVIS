@@ -27,6 +27,7 @@ from app.brain.terminal.models import TerminalExecutionResult, TerminalExecution
 from app.brain.tools.models import ToolDefinition, ToolResult
 from app.brain.tools.validators import validate_arguments
 from app.brain.vision.controller import get_vision_controller
+from app.brain.vision.errors import VisionCaptureUnsupportedError, VisionDisabledError, VisionImageError, VisionPolicyError
 
 
 def _tool_result(success: bool, status_category: str, message: str, display_value: str = "", reference_fields: dict | None = None) -> ToolResult:
@@ -778,6 +779,103 @@ def _handler_vision_find_visual_element_in_browser_capture(args: dict) -> ToolRe
     return result
 
 
+def _desktop_capture_error_result(error: Exception) -> ToolResult:
+    return _tool_result(False, "failed", str(error))
+
+
+def _handler_desktop_list_windows(args: dict) -> ToolResult:
+    result = get_vision_controller().list_windows()
+    if not result.success:
+        return _tool_result(False, "failed", result.error_reason or "Could not list open windows.")
+    if not result.windows:
+        return _tool_result(True, "success", "No open windows were found.")
+    message = "\n".join(f"{window['window_id']}: {window['title']}" for window in result.windows)
+    return _tool_result(True, "success", message, message)
+
+
+def _handler_desktop_capture_screen(args: dict) -> ToolResult:
+    try:
+        capture = get_vision_controller().capture_desktop_screen()
+    except (VisionDisabledError, VisionPolicyError, VisionCaptureUnsupportedError, VisionImageError) as error:
+        return _desktop_capture_error_result(error)
+    message = f"Captured a screenshot of your entire desktop as {capture.capture_id}."
+    return _tool_result(True, "success", message, capture.capture_id)
+
+
+def _handler_desktop_capture_window(args: dict) -> ToolResult:
+    schema = {
+        "window_id": {"type": "integer"},
+        "window_title": {"type": "text", "max_length": 200},
+    }
+    validated = validate_arguments(schema, args)
+    try:
+        capture = get_vision_controller().capture_desktop_window(
+            window_id=validated["window_id"],
+            window_title=validated["window_title"],
+        )
+    except (VisionDisabledError, VisionPolicyError, VisionCaptureUnsupportedError, VisionImageError) as error:
+        return _desktop_capture_error_result(error)
+    message = f"Captured a screenshot of the window titled '{capture.window_title}' as {capture.capture_id}."
+    return _tool_result(True, "success", message, capture.capture_id)
+
+
+def _handler_vision_describe_desktop_capture(args: dict) -> ToolResult:
+    schema = {
+        "capture_id": {"type": "text", "max_length": 80},
+        "detail_level": {"type": "text", "max_length": 20, "required": False},
+    }
+    validated = validate_arguments(schema, args)
+    evidence = get_vision_controller().describe_desktop_capture(
+        capture_id=validated["capture_id"],
+        detail_level=validated.get("detail_level", "normal"),
+    )
+    message = evidence.description if evidence.success else evidence.error_reason or "Desktop visual description failed."
+    return _vision_tool_result(evidence, message or "No desktop visual description was returned.")
+
+
+def _handler_vision_extract_text_from_desktop_capture(args: dict) -> ToolResult:
+    schema = {
+        "capture_id": {"type": "text", "max_length": 80},
+        "language_hint": {"type": "text", "max_length": 20, "required": False},
+        "max_characters": {"type": "integer", "required": False},
+    }
+    validated = validate_arguments(schema, args)
+    evidence = get_vision_controller().extract_text_from_desktop_capture(
+        capture_id=validated["capture_id"],
+        language_hint=validated.get("language_hint", ""),
+        max_characters=validated.get("max_characters"),
+    )
+    message = evidence.extracted_text if evidence.success else evidence.error_reason or "Desktop visual OCR failed."
+    return _vision_tool_result(evidence, message or "No visible text was extracted from the desktop capture.")
+
+
+def _handler_vision_find_visual_element_in_desktop_capture(args: dict) -> ToolResult:
+    schema = {
+        "capture_id": {"type": "text", "max_length": 80},
+        "query": {"type": "text", "max_length": 200},
+        "max_results": {"type": "integer", "required": False},
+    }
+    validated = validate_arguments(schema, args)
+    evidence = get_vision_controller().find_visual_element_in_desktop_capture(
+        capture_id=validated["capture_id"],
+        query=validated["query"],
+        max_results=validated.get("max_results", 3),
+    )
+    if evidence.success:
+        match_outcome = str(evidence.match_outcome or "").strip()
+        if match_outcome == "found":
+            message = f"Found {len(evidence.visual_regions)} visual match{'es' if len(evidence.visual_regions) != 1 else ''} in the desktop capture."
+        elif match_outcome == "uncertain":
+            message = f"A possible visual match could not be verified for {validated['query']}."
+        else:
+            message = f"No verified visual match was detected for {validated['query']}."
+    else:
+        message = evidence.error_reason or "Desktop visual element search failed."
+    result = _vision_tool_result(evidence, message)
+    result.reference_fields["requested_query"] = validated["query"]
+    return result
+
+
 def _filesystem_result(method, *args, **kwargs) -> ToolResult:
     controller = get_filesystem_controller()
     try:
@@ -929,6 +1027,12 @@ def build_builtin_tools() -> list[ToolDefinition]:
         ToolDefinition("vision.describe_browser_capture", "Describe a temporary browser viewport capture.", {"capture_id": {"type": "text", "max_length": 80}, "detail_level": {"type": "text", "max_length": 20, "required": False}}, "read_only", False, _handler_vision_describe_browser_capture, lambda result: result.display_value or result.message),
         ToolDefinition("vision.extract_text_from_browser_capture", "Extract visible text from a temporary browser viewport capture.", {"capture_id": {"type": "text", "max_length": 80}, "language_hint": {"type": "text", "max_length": 20, "required": False}, "max_characters": {"type": "integer", "required": False}}, "read_only", False, _handler_vision_extract_text_from_browser_capture, lambda result: result.display_value or result.message),
         ToolDefinition("vision.find_visual_element_in_browser_capture", "Find a visually described element inside a temporary browser viewport capture.", {"capture_id": {"type": "text", "max_length": 80}, "query": {"type": "text", "max_length": 200}, "max_results": {"type": "integer", "required": False}}, "read_only", False, _handler_vision_find_visual_element_in_browser_capture, lambda result: result.display_value or result.message),
+        ToolDefinition("desktop.list_windows", "List currently open, visible desktop windows by title.", {}, "read_only", False, _handler_desktop_list_windows, lambda result: result.display_value or result.message),
+        ToolDefinition("desktop.capture_screen", "Capture a one-shot screenshot of the entire desktop into an opaque temporary vision capture.", {}, "persistent_write", False, _handler_desktop_capture_screen, lambda result: result.display_value or result.message),
+        ToolDefinition("desktop.capture_window", "Capture a one-shot screenshot of a specific open window into an opaque temporary vision capture.", {"window_id": {"type": "integer"}, "window_title": {"type": "text", "max_length": 200}}, "persistent_write", False, _handler_desktop_capture_window, lambda result: result.display_value or result.message),
+        ToolDefinition("vision.describe_desktop_capture", "Describe a temporary desktop capture.", {"capture_id": {"type": "text", "max_length": 80}, "detail_level": {"type": "text", "max_length": 20, "required": False}}, "read_only", False, _handler_vision_describe_desktop_capture, lambda result: result.display_value or result.message),
+        ToolDefinition("vision.extract_text_from_desktop_capture", "Extract visible text from a temporary desktop capture.", {"capture_id": {"type": "text", "max_length": 80}, "language_hint": {"type": "text", "max_length": 20, "required": False}, "max_characters": {"type": "integer", "required": False}}, "read_only", False, _handler_vision_extract_text_from_desktop_capture, lambda result: result.display_value or result.message),
+        ToolDefinition("vision.find_visual_element_in_desktop_capture", "Find a visually described element inside a temporary desktop capture.", {"capture_id": {"type": "text", "max_length": 80}, "query": {"type": "text", "max_length": 200}, "max_results": {"type": "integer", "required": False}}, "read_only", False, _handler_vision_find_visual_element_in_desktop_capture, lambda result: result.display_value or result.message),
         ToolDefinition("power.request_lock", "Request lock confirmation.", {}, "sensitive", True, _handler_request_lock, lambda result: result.display_value or result.message),
         ToolDefinition("power.request_restart", "Request restart confirmation.", {}, "sensitive", True, _handler_request_restart, lambda result: result.display_value or result.message),
         ToolDefinition("power.request_shutdown", "Request shutdown confirmation.", {}, "sensitive", True, _handler_request_shutdown, lambda result: result.display_value or result.message),
