@@ -1,5 +1,9 @@
 # Changelog
 
+## Bug fix: config set discarding session-only toggles
+- Fixed `config_set()` in `app/brain/configuration/config_commands.py` silently disabling any active session-only setting (`ai on`, `voice on`, `developer mode on`, `conversation on`, etc.) whenever an unrelated `config set <key> <value>` command ran. The cause: `config_set()` rebuilt the in-memory runtime snapshot from the just-reloaded config file alone, discarding whatever session-only overrides were layered on top of it.
+- `config_set()` now captures the current effective runtime config (file plus active session overrides) before writing, patches in only the newly persisted key, and installs that merged result as the new snapshot. Every other active session-only override now survives an unrelated `config set` call, and a `config set` on a key that itself has a stale session override still ends up with the newly persisted value. `config_reset()` and `config_reload()` are unchanged; they still intentionally wipe the session snapshot.
+
 ## RFC-008
 - Added `category` (`fact`/`preference`/`learned_pattern`) and `source` (`user`/`ai_proposed`) fields to memory entries, defaulted for backward compatibility.
 - Added a `memory list learned` deterministic command and surfaced category/source in `memory list` output.

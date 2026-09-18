@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
 
-from app.brain.configuration.runtime_config import get_effective_runtime_config, get_runtime_config, get_runtime_config_snapshot, replace_runtime_config, reset_runtime_config
+from app.brain.configuration.runtime_config import get_effective_runtime_config, get_runtime_config, get_runtime_config_snapshot, replace_runtime_config, reset_runtime_config, set_runtime_config_value
 from app.brain.configuration.config_writer import write_config
 from app.brain.configuration.state import get_runtime_config_state
 from app.brain.router import route_command
@@ -91,3 +91,27 @@ class RuntimeConfigTests(unittest.TestCase):
             self.assertEqual(route_command("config set vision_model broken-model"), "Configuration change rejected.")
         self.assertEqual(get_runtime_config_snapshot(), before_snapshot)
         self.assertEqual(get_runtime_config_state().generation, before_generation)
+
+    def test_config_set_preserves_active_session_only_override(self) -> None:
+        # Regression test for a bug where config_set() replaced the entire in-memory
+        # runtime snapshot with file-only content, silently discarding session-only
+        # toggles (like "ai on") that are never written to config.json.
+        self.assertEqual(route_command("ai on"), "AI enabled for this session.")
+        self.assertEqual(route_command("ai status"), "AI is enabled.")
+        self.assertEqual(route_command("config set ollama_model llama3.2:latest"), "Configuration updated: ollama_model.")
+        self.assertEqual(route_command("ai status"), "AI is enabled.")
+        self.assertEqual(load_config()["ollama_model"], "llama3.2:latest")
+
+    def test_config_set_preserves_multiple_session_only_overrides(self) -> None:
+        self.assertEqual(route_command("ai on"), "AI enabled for this session.")
+        self.assertEqual(route_command("developer mode on"), "Developer mode enabled.")
+        self.assertEqual(route_command("config set ollama_model llama3.2:latest"), "Configuration updated: ollama_model.")
+        self.assertEqual(route_command("ai status"), "AI is enabled.")
+        self.assertEqual(route_command("developer mode status"), "Developer mode is enabled.")
+
+    def test_config_set_on_same_key_overrides_stale_session_value(self) -> None:
+        set_runtime_config_value("ai_enabled", True)
+        self.assertEqual(get_effective_runtime_config()["ai_enabled"], True)
+        self.assertEqual(route_command("config set ai_enabled false"), "Configuration updated: ai_enabled.")
+        self.assertEqual(get_effective_runtime_config()["ai_enabled"], False)
+        self.assertEqual(route_command("ai status"), "AI is disabled.")

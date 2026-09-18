@@ -30,6 +30,7 @@ def config_set(key: str, value: Any) -> str:
         validated_value = validate_change(key, value)
     except ValueError:
         return "Configuration change rejected."
+    merged = get_effective_runtime_config()
     config_path = get_config_path()
     candidate = load_config(config_path)
     candidate[key] = validated_value
@@ -38,7 +39,8 @@ def config_set(key: str, value: Any) -> str:
     reloaded = load_config(config_path)
     if reloaded.get(key) != candidate.get(key):
         return "Configuration change rejected."
-    replace_runtime_config(reloaded, status="updated")
+    merged[key] = reloaded[key]
+    replace_runtime_config(merged, status="updated")
     if key.startswith("vision_"):
         invalidate_vision_readiness_cache()
     return f"Configuration updated: {key}."
