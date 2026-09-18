@@ -1,2 +1,7 @@
 playwright>=1.46,<2
 Pillow>=10,<12
+faster-whisper>=1.0,<2
+piper-tts>=1.6,<2
+speechbrain>=1.0,<2
+torchaudio>=2.1
+sounddevice>=0.4,<1

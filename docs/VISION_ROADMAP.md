@@ -66,12 +66,22 @@ Opt-in closed-set face enrollment and local identity support:
 - visual instructions require explicit owner intent;
 - CAPTCHA pauses for owner completion.
 
-## Future Voice Runtime
+## RFC-009
 
-- local speech-to-text and text-to-speech;
-- wake word support;
-- visible microphone state;
-- owner speaker enrollment and verification;
-- anti-replay considerations;
-- unverified speakers cannot issue owner commands;
-- speaker match alone never authorizes HIGH-risk actions.
+On-demand voice input/output, local by default, reusing the same Task Interpreter /
+Planner / Risk Analyzer / Agent Runtime pipeline as typed input:
+
+- local speech-to-text (`faster-whisper`) and text-to-speech (Piper);
+- push-to-talk from the local PC mic or from a phone PWA client over the same
+  Tailscale-bound listener RFC-010 uses (`/voice/turn`, `/voice/client`);
+- visible microphone state (`voice status` always accurate; mic-active only for the
+  duration of one capture);
+- owner speaker enrollment (closed-set, opt-in, confirmed deletion) and verification
+  (SpeechBrain ECAPA-TDNN) before any utterance is treated as input at all;
+- unverified speakers cannot issue owner commands — a non-owner voice produces no action
+  and no transcript is kept;
+- speaker match alone never authorizes HIGH-risk actions — voice input still goes through
+  the same Risk Analyzer and approval flow as typed input;
+- not yet done: wake-word detection (push-to-talk only for now) and anti-replay/liveness
+  detection — both flagged explicitly as deferred in `docs/RFC-009_ON_DEMAND_VOICE_ASSISTANT.md`,
+  not silently assumed solved.

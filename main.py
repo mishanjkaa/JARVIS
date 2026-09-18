@@ -5,6 +5,11 @@ from app.brain.location.server import start_location_server_if_enabled, stop_loc
 from app.brain.logging_setup import initialize_logging
 from config.settings import APP_NAME, VERSION
 
+# Importing app.brain.voice.server registers RFC-009's /voice/turn and /voice/client routes
+# on the shared remote server (see app.brain.location.server's module docstring) before it
+# starts listening below -- it has no lifecycle functions of its own to call.
+import app.brain.voice.server  # noqa: E402,F401
+
 
 def start_jarvis() -> None:
     initialize_logging()

@@ -6,21 +6,52 @@ import socket
 import threading
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from app.brain.audit.audit_log import record_audit_event
 from app.brain.configuration.runtime_config import get_effective_runtime_config
 from app.brain.location.controller import get_location_controller
 from app.brain.location.errors import LocationBindError
 
+# This module owns the single Tailscale-bound HTTP listener shared by every remote-phone
+# route in JARVIS: RFC-010's /location/overland (below) and RFC-009's /voice/turn
+# (registered by app.brain.voice.server via register_route()) run on the same
+# ThreadingHTTPServer, the same location_bind_host/location_port, and the same
+# location_shared_secret — one bind address and one credential to configure in Tailscale
+# ACLs, rather than a second listener per feature. The name stayed "location" because this
+# server existed for RFC-010 first; nothing below is location-specific except the
+# /location/overland route itself.
 OVERLAND_PATH = "/location/overland"
-# Generous for a normal Overland batch (a handful of points); guards the handler against
-# an oversized body from anything that isn't the real app.
-_MAX_BODY_BYTES = 262_144
+# Generous enough for both a normal Overland batch (a handful of GeoJSON points, tiny) and a
+# push-to-talk voice-turn WAV upload (a few seconds of 16kHz mono audio, well under 1MB);
+# guards every route's handler against an oversized body from anything that isn't a real
+# client.
+_MAX_BODY_BYTES = 8_388_608
+
+RouteHandler = Callable[[Mapping[str, str], bytes], "tuple[int, bytes]"]
+GetRouteHandler = Callable[[], "tuple[int, bytes, str]"]
 
 _server_lock = threading.Lock()
 _server: ThreadingHTTPServer | None = None
 _server_thread: threading.Thread | None = None
+_post_routes: dict[str, RouteHandler] = {}
+_get_routes: dict[str, GetRouteHandler] = {}
+
+
+def register_route(path: str, handler: RouteHandler) -> None:
+    """Register a POST route on the shared remote server. `handler` takes the request
+    headers and raw body and returns (status_code, response_body_bytes), the same shape as
+    handle_overland_request below. Safe to call before the server has started (routes are
+    just a dict looked up per-request) or after (a new registration takes effect on the
+    next request)."""
+    _post_routes[path] = handler
+
+
+def register_get_route(path: str, handler: GetRouteHandler) -> None:
+    """Register a GET route on the shared remote server (e.g. serving a static page, such
+    as RFC-009's phone push-to-talk client). `handler` takes no arguments and returns
+    (status_code, response_body_bytes, content_type)."""
+    _get_routes[path] = handler
 
 
 def is_bind_host_present(host: str) -> bool:
@@ -135,28 +166,43 @@ def handle_overland_request(*, headers: Mapping[str, str], raw_body: bytes) -> t
     return 200, _json_response({"result": "ok"})
 
 
-class _OverlandRequestHandler(BaseHTTPRequestHandler):
+class _RemoteRequestHandler(BaseHTTPRequestHandler):
+    """Dispatches every request on the shared Tailscale-bound listener by path, to whichever
+    handler register_route()/register_get_route() registered for it. Not location- or
+    voice-specific itself -- see the module docstring above."""
+
     def log_message(self, format: str, *args: Any) -> None:
         return  # audit_log already records accept/reject outcomes; skip stderr access logs
 
     def do_POST(self) -> None:
-        if self.path.split("?", 1)[0] != OVERLAND_PATH:
-            self._respond(404, _json_response({"result": "not found"}))
+        path = self.path.split("?", 1)[0]
+        handler = _post_routes.get(path)
+        if handler is None:
+            self._respond(404, _json_response({"result": "not found"}), "application/json")
             return
         try:
             length = int(self.headers.get("Content-Length", 0) or 0)
         except ValueError:
             length = 0
         if length <= 0 or length > _MAX_BODY_BYTES:
-            self._respond(400, _json_response({"result": "invalid body"}))
+            self._respond(400, _json_response({"result": "invalid body"}), "application/json")
             return
         raw_body = self.rfile.read(length)
-        status_code, response_body = handle_overland_request(headers=self.headers, raw_body=raw_body)
-        self._respond(status_code, response_body)
+        status_code, response_body = handler(self.headers, raw_body)
+        self._respond(status_code, response_body, "application/json")
 
-    def _respond(self, status_code: int, body: bytes) -> None:
+    def do_GET(self) -> None:
+        path = self.path.split("?", 1)[0]
+        handler = _get_routes.get(path)
+        if handler is None:
+            self._respond(404, _json_response({"result": "not found"}), "application/json")
+            return
+        status_code, body, content_type = handler()
+        self._respond(status_code, body, content_type)
+
+    def _respond(self, status_code: int, body: bytes, content_type: str) -> None:
         self.send_response(status_code)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -173,7 +219,7 @@ def start_location_server() -> str:
         host = str(config.get("location_bind_host", ""))
         validate_bind_host(host)
         port = int(config.get("location_port", 8766))
-        server = ThreadingHTTPServer((host, port), _OverlandRequestHandler)
+        server = ThreadingHTTPServer((host, port), _RemoteRequestHandler)
         thread = threading.Thread(target=server.serve_forever, name="jarvis-location-server", daemon=True)
         thread.start()
         _server = server
@@ -212,3 +258,6 @@ def start_location_server_if_enabled() -> None:
         start_location_server()
     except LocationBindError as error:
         logging.getLogger(__name__).error("Location server did not start: %s", error)
+
+
+register_route(OVERLAND_PATH, lambda headers, raw_body: handle_overland_request(headers=headers, raw_body=raw_body))

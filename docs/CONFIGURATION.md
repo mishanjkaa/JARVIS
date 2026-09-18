@@ -97,3 +97,16 @@ RFC-010 keeps location/navigation configuration in its own `location_*`/`osrm_*`
   Base URL of the OSRM routing provider used by `navigation.start`/`navigation.get_next_instruction`. Defaults to the public OSRM demo server; point this at a self-hosted OSRM instance to remove the demo server's rate limits, without any change to the `navigation.*` tool surface.
 
 `/location/overland` is bound only to `location_bind_host`, is not reachable from `0.0.0.0`, and is not registered as an AI-callable tool — see `docs/RFC-010_PHONE_LOCATION_NAVIGATION.md` for the full security rationale.
+
+## Voice
+
+RFC-009 keeps voice configuration in its own `voice_*` family. `voice_enabled` (already present for the pre-existing `voice on`/`voice off` toggle) now actually gates the Voice Runtime, including `/voice/turn` and `/voice/client`, which share RFC-010's Tailscale-bound listener and `location_bind_host`/`location_port`/`location_shared_secret` rather than opening a second one.
+
+- `voice_stt_model`
+  The `faster-whisper` model size used for local speech-to-text (e.g. `tiny`, `base`, `small`). Default `small`.
+- `voice_tts_voice`
+  Filesystem path to a downloaded Piper `.onnx` voice model. Empty (the default) means text-to-speech is unavailable until the operator downloads a voice and sets this — the same "operator provides the model" convention as Ollama.
+- `voice_verification_threshold`
+  Minimum cosine similarity (0.0-1.0) between a live utterance's speaker embedding and the enrolled owner's stored embedding before a voice turn is accepted. Default `0.75`.
+
+Voice enrollment (`voice enroll`, `voice forget me`) stores a single averaged speaker embedding in `data/voice_profile.json` — never raw audio. See `docs/RFC-009_ON_DEMAND_VOICE_ASSISTANT.md` for the full hard-boundary rationale (only the enrolled owner's voice is ever processed) and the Phase 0 library choices.

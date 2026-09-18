@@ -39,7 +39,9 @@ from app.brain.security.confirmation import (
 from app.brain.skills.calculator import calculate_expression
 from app.brain.skills.self_check import run_self_check
 from app.brain.skills.system_info import get_local_date, get_local_time
-from app.brain.voice.voice_controller import voice_controller, voice_off, voice_on, voice_status
+from app.brain.voice.controller import get_voice_controller
+from app.brain.voice.errors import VoiceError
+from app.brain.voice.voice_controller import voice_cancel_enrollment, voice_controller, voice_enroll, voice_forget_me, voice_off, voice_on, voice_status
 from app.brain.runtime.conversation_runtime import ConversationRuntime
 from app.brain.configuration.runtime_config import get_effective_runtime_config, set_runtime_config_value
 from app.brain.agent.controller import get_agent_controller
@@ -251,6 +253,10 @@ Voice
 - voice status
 - voice on
 - voice off
+- voice enroll
+- cancel voice enrollment
+- voice forget me
+- voice talk
 
 Exit
 - exit"""
@@ -721,6 +727,30 @@ Exit
 
         if normalized_command == "voice off":
             return voice_off()
+
+        if normalized_command == "voice enroll":
+            try:
+                return voice_enroll()
+            except VoiceError as error:
+                return str(error)
+
+        if normalized_command == "cancel voice enrollment":
+            return voice_cancel_enrollment()
+
+        if normalized_command == "voice forget me":
+            return request_confirmation("voice forget me")
+
+        if normalized_command == "confirm voice forget me":
+            if confirm_pending_action("voice forget me"):
+                return voice_forget_me()
+            return "No pending voice-forget-me action."
+
+        if normalized_command == "voice talk":
+            try:
+                result = get_voice_controller().push_to_talk_local(route_text=route_command)
+                return result.reply_text
+            except VoiceError as error:
+                return str(error)
 
         if normalized_command == "exit":
             logger.info("Recognized command: exit")

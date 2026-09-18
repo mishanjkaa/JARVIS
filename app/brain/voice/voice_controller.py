@@ -1,5 +1,5 @@
-from app.brain.voice.speech_to_text import transcribe_speech
-from app.brain.voice.text_to_speech import speak_text
+from app.brain.configuration.runtime_config import get_effective_runtime_config, set_runtime_config_value
+from app.brain.voice.controller import get_voice_controller
 
 
 class VoiceController:
@@ -11,22 +11,35 @@ voice_controller = VoiceController()
 
 
 def get_voice_state() -> bool:
-    return voice_controller.enabled
+    """Kept for app.brain.skills.self_check's existing import. Reflects the persisted
+    voice_enabled setting (previously this only reflected an in-memory flag that voice_on/
+    voice_off never actually kept in sync with runtime config, unlike ai_enabled)."""
+    return bool(get_effective_runtime_config().get("voice_enabled", False))
 
 
 def voice_status() -> str:
-    return "Voice is enabled." if voice_controller.enabled else "Voice is disabled."
+    return get_voice_controller().status_message()
 
 
 def voice_on() -> str:
+    set_runtime_config_value("voice_enabled", True)
     voice_controller.enabled = True
     return "Voice enabled for this session."
 
 
 def voice_off() -> str:
+    set_runtime_config_value("voice_enabled", False)
     voice_controller.enabled = False
     return "Voice disabled for this session."
 
 
-def handle_voice_output(text: str) -> str:
-    return speak_text(text)
+def voice_enroll() -> str:
+    return get_voice_controller().enroll_sample()
+
+
+def voice_cancel_enrollment() -> str:
+    return get_voice_controller().cancel_enrollment()
+
+
+def voice_forget_me() -> str:
+    return get_voice_controller().forget_me()

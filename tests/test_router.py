@@ -230,11 +230,13 @@ class RouterTests(unittest.TestCase):
         self.assertIsNone(get_context().last_opened_folder)
 
     def test_voice_commands(self) -> None:
-        self.assertEqual(route_command("voice status"), "Voice is disabled.")
+        # voice_status() now reports enabled/mic-active/enrolled state (RFC-009), mirroring
+        # vision status/location status, rather than the old fixed "Voice is enabled/disabled."
+        self.assertIn("Voice enabled: no", route_command("voice status"))
         self.assertEqual(route_command("voice on"), "Voice enabled for this session.")
-        self.assertEqual(route_command("voice status"), "Voice is enabled.")
+        self.assertIn("Voice enabled: yes", route_command("voice status"))
         self.assertEqual(route_command("voice off"), "Voice disabled for this session.")
-        self.assertEqual(route_command("voice status"), "Voice is disabled.")
+        self.assertIn("Voice enabled: no", route_command("voice status"))
 
     def test_developer_mode_commands(self) -> None:
         self.assertEqual(route_command("developer mode status"), "Developer mode is disabled.")

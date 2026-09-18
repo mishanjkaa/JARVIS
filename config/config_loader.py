@@ -93,6 +93,13 @@ def load_config(path: Path | str | None = None) -> dict[str, Any]:
         "location_port": (1, 65535),
         "location_stale_after_seconds": (1, 86400),
     }
+    float_ranges = {
+        "voice_verification_threshold": (0.0, 1.0),
+    }
+    for key, (minimum, maximum) in float_ranges.items():
+        value = merged.get(key)
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or not minimum <= float(value) <= maximum:
+            merged[key] = DEFAULT_SETTINGS[key]
     for key, (minimum, maximum) in numeric_ranges.items():
         value = merged.get(key)
         if not isinstance(value, int) or isinstance(value, bool) or not minimum <= value <= maximum:

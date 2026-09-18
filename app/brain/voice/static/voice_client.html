@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>JARVIS Voice</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; min-height: 100vh; background: #111; color: #eee; font-family: system-ui, sans-serif;
+         display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 24px; box-sizing: border-box; }
+  h1 { font-size: 1.1rem; font-weight: 600; margin: 0; color: #9ad; }
+  #talk { width: 200px; height: 200px; border-radius: 50%; border: none; background: #2a63c9; color: #fff;
+          font-size: 1.1rem; font-weight: 600; touch-action: manipulation; user-select: none; }
+  #talk.recording { background: #c92a2a; }
+  #talk:disabled { background: #444; color: #999; }
+  #status { min-height: 1.4em; color: #9ad; text-align: center; }
+  #transcript, #reply { max-width: 90vw; width: 420px; text-align: center; white-space: pre-wrap; }
+  #transcript { color: #aaa; font-size: 0.9rem; }
+  #reply { color: #eee; font-size: 1rem; }
+  #secretRow { display: flex; gap: 8px; align-items: center; }
+  #secret { background: #222; color: #eee; border: 1px solid #444; border-radius: 6px; padding: 6px 8px; width: 220px; }
+  button.small { background: #333; color: #eee; border: 1px solid #555; border-radius: 6px; padding: 6px 10px; }
+</style>
+</head>
+<body>
+<h1>JARVIS Voice</h1>
+<div id="secretRow">
+  <input id="secret" type="password" placeholder="Shared secret" autocomplete="off">
+  <button class="small" id="saveSecret">Save</button>
+</div>
+<button id="talk">Hold to talk</button>
+<div id="status">Not recording.</div>
+<div id="transcript"></div>
+<div id="reply"></div>
+<audio id="player" hidden></audio>
+<script>
+(() => {
+  "use strict";
+  const SECRET_STORAGE_KEY = "jarvis-voice-shared-secret";
+  const SAMPLE_RATE = 16000;
+  const MAX_SECONDS = 15;
+
+  const talkButton = document.getElementById("talk");
+  const statusEl = document.getElementById("status");
+  const transcriptEl = document.getElementById("transcript");
+  const replyEl = document.getElementById("reply");
+  const secretInput = document.getElementById("secret");
+  const player = document.getElementById("player");
+
+  secretInput.value = localStorage.getItem(SECRET_STORAGE_KEY) || "";
+  document.getElementById("saveSecret").addEventListener("click", () => {
+    localStorage.setItem(SECRET_STORAGE_KEY, secretInput.value.trim());
+    statusEl.textContent = "Secret saved.";
+  });
+
+  let audioContext = null;
+  let sourceNode = null;
+  let processorNode = null;
+  let recordedChunks = [];
+  let recording = false;
+
+  function floatTo16BitPCM(float32) {
+    const output = new Int16Array(float32.length);
+    for (let i = 0; i < float32.length; i++) {
+      const s = Math.max(-1, Math.min(1, float32[i]));
+      output[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+    }
+    return output;
+  }
+
+  function encodeWav(samples, sampleRate) {
+    const buffer = new ArrayBuffer(44 + samples.length * 2);
+    const view = new DataView(buffer);
+    const writeString = (offset, str) => { for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i)); };
+    writeString(0, "RIFF");
+    view.setUint32(4, 36 + samples.length * 2, true);
+    writeString(8, "WAVE");
+    writeString(12, "fmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeString(36, "data");
+    view.setUint32(40, samples.length * 2, true);
+    let offset = 44;
+    for (let i = 0; i < samples.length; i++, offset += 2) view.setInt16(offset, samples[i], true);
+    return new Blob([buffer], { type: "audio/wav" });
+  }
+
+  async function startRecording() {
+    if (recording) return;
+    recordedChunks = [];
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } });
+    sourceNode = audioContext.createMediaStreamSource(stream);
+    processorNode = audioContext.createScriptProcessor(4096, 1, 1);
+    processorNode.onaudioprocess = (event) => {
+      recordedChunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
+    };
+    sourceNode.connect(processorNode);
+    processorNode.connect(audioContext.destination);
+    recording = true;
+    talkButton.classList.add("recording");
+    talkButton.textContent = "Listening...";
+    statusEl.textContent = "Recording (release to send, max " + MAX_SECONDS + "s).";
+    stream.getTracks().forEach((track) => {
+      setTimeout(() => { if (recording) stopRecording(); }, MAX_SECONDS * 1000);
+    });
+    startRecording._stream = stream;
+  }
+
+  function mergeChunks(chunks) {
+    const length = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+    const merged = new Float32Array(length);
+    let offset = 0;
+    for (const chunk of chunks) { merged.set(chunk, offset); offset += chunk.length; }
+    return merged;
+  }
+
+  async function stopRecording() {
+    if (!recording) return;
+    recording = false;
+    talkButton.classList.remove("recording");
+    talkButton.textContent = "Hold to talk";
+    if (processorNode) processorNode.disconnect();
+    if (sourceNode) sourceNode.disconnect();
+    if (startRecording._stream) startRecording._stream.getTracks().forEach((t) => t.stop());
+    const nativeRate = audioContext.sampleRate;
+    await audioContext.close();
+    const merged = mergeChunks(recordedChunks);
+    if (merged.length === 0) { statusEl.textContent = "Nothing recorded."; return; }
+    statusEl.textContent = "Sending...";
+    talkButton.disabled = true;
+    try {
+      const pcm16 = floatTo16BitPCM(merged);
+      const wavBlob = encodeWav(pcm16, nativeRate);
+      await sendTurn(wavBlob);
+    } finally {
+      talkButton.disabled = false;
+    }
+  }
+
+  async function sendTurn(wavBlob) {
+    const secret = localStorage.getItem(SECRET_STORAGE_KEY) || "";
+    try {
+      const response = await fetch("/voice/turn", {
+        method: "POST",
+        headers: { "Authorization": "Bearer " + secret, "Content-Type": "audio/wav" },
+        body: wavBlob,
+      });
+      const data = await response.json();
+      if (data.result === "unauthorized") {
+        statusEl.textContent = "Rejected: wrong or missing shared secret.";
+        return;
+      }
+      if (data.result === "no_action") {
+        statusEl.textContent = data.error || "No action was taken.";
+        transcriptEl.textContent = "";
+        replyEl.textContent = "";
+        return;
+      }
+      statusEl.textContent = "Done.";
+      transcriptEl.textContent = data.transcript ? "You said: " + data.transcript : "";
+      replyEl.textContent = data.reply_text || "";
+      if (data.reply_audio_wav_base64) {
+        player.src = "data:audio/wav;base64," + data.reply_audio_wav_base64;
+        player.hidden = false;
+        player.play().catch(() => {});
+      }
+    } catch (error) {
+      statusEl.textContent = "Network error talking to JARVIS.";
+    }
+  }
+
+  talkButton.addEventListener("mousedown", startRecording);
+  talkButton.addEventListener("touchstart", (event) => { event.preventDefault(); startRecording(); });
+  talkButton.addEventListener("mouseup", stopRecording);
+  talkButton.addEventListener("mouseleave", () => { if (recording) stopRecording(); });
+  talkButton.addEventListener("touchend", (event) => { event.preventDefault(); stopRecording(); });
+})();
+</script>
+</body>
+</html>
