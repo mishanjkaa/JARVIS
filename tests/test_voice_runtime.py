@@ -230,6 +230,27 @@ class VoiceRuntimeTests(unittest.TestCase):
         joined = "\n".join(logs.output)
         self.assertIn("result=reject", joined)
 
+    def test_voice_talk_accepts_real_field_observed_similarity_score(self) -> None:
+        # Regression test encoding an actual field observation from a real voice enroll +
+        # voice talk run: the enrolled owner's own genuine voice produced a live embedding
+        # with cosine similarity 0.7311 to the enrolled profile (logged as
+        # "similarity=0.7311 threshold=0.7500 result=reject"). The original default
+        # threshold (0.75) rejected this genuine attempt by a hair; the recalibrated default
+        # (0.6) must accept it.
+        import math
+
+        self._enroll_owner()  # profile embedding is [1.0, 0.0, 0.0] -- see _owner_embedding
+        target_similarity = 0.7311
+        orthogonal_component = math.sqrt(1.0 - target_similarity**2)
+        live_embedding = [target_similarity, orthogonal_component, 0.0]
+        self.fake_verification._embedding_for = lambda _audio: live_embedding
+
+        threshold = get_effective_runtime_config()["voice_verification_threshold"]
+        self.assertLess(threshold, target_similarity, "default threshold regressed back above a real observed genuine-match score")
+
+        result = get_voice_controller().handle_voice_turn([0.0] * 1600, route_text=lambda text: "ok")
+        self.assertEqual(result.reply_text, "ok")
+
     def test_voice_verification_logs_embedding_dimension_mismatch(self) -> None:
         # A dimension mismatch makes cosine_similarity() silently return 0.0 with no other
         # symptom; this must be surfaced explicitly rather than presented as an ordinary

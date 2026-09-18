@@ -103,7 +103,7 @@ DEFAULT_SETTINGS = {
     "osrm_base_url": "http://router.project-osrm.org",
     "voice_stt_model": "small",
     "voice_tts_voice": "",
-    "voice_verification_threshold": 0.75,
+    "voice_verification_threshold": 0.6,
     "voice_input_device": 1,
     "voice_input_sample_rate": 44100,
     "voice_input_channels": 4,

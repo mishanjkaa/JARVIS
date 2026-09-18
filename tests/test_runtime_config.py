@@ -95,6 +95,30 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertEqual(config["voice_input_sample_rate"], 48000)
         self.assertEqual(config["voice_input_channels"], 2)
 
+    def test_voice_verification_threshold_default_is_data_driven_recalibration(self) -> None:
+        # Regression test for the recalibration itself: the original 0.75 default rejected
+        # a real enrolled owner's own genuine voice (live similarity 0.7311, logged on real
+        # hardware). The new default must stay below that observed genuine-match score.
+        self.assertEqual(get_effective_runtime_config()["voice_verification_threshold"], 0.6)
+        self.assertLess(get_effective_runtime_config()["voice_verification_threshold"], 0.7311)
+        self.assertEqual(route_command("config set voice_verification_threshold 0.5"), "Configuration updated: voice_verification_threshold.")
+        self.assertEqual(load_config()["voice_verification_threshold"], 0.5)
+        reset_runtime_config()
+        self.assertEqual(get_effective_runtime_config()["voice_verification_threshold"], 0.5)
+
+    def test_config_set_parses_float_values_not_just_bool_and_int(self) -> None:
+        # Found while making voice_verification_threshold's new default retunable from the
+        # CLI: `config set` never parsed a float at all (only "true"/"false" and a
+        # plain-digit int), so any float-typed setting -- currently only
+        # voice_verification_threshold -- silently returned "Configuration change
+        # rejected." for a value like "0.65", with nothing indicating the real cause was a
+        # parsing gap rather than a bad value. String-valued keys must still round-trip as
+        # plain strings, including ones with a decimal-looking value it can't parse.
+        self.assertEqual(route_command("config set voice_verification_threshold 0.65"), "Configuration updated: voice_verification_threshold.")
+        self.assertEqual(load_config()["voice_verification_threshold"], 0.65)
+        self.assertEqual(route_command("config set vision_model qwen2.5vl:3b"), "Configuration updated: vision_model.")
+        self.assertEqual(load_config()["vision_model"], "qwen2.5vl:3b")
+
     def test_voice_input_device_accepts_zero_but_rejects_out_of_range(self) -> None:
         # Device index 0 is a legitimate PortAudio device (the first one) and must not be
         # treated as falsy/invalid the way most other voice_* integer settings treat 0.

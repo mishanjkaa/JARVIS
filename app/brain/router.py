@@ -579,6 +579,21 @@ Exit
                 value = value.lower() == "true"
             elif value.isdigit():
                 value = int(value)
+            else:
+                # Found while making the newly-recalibrated voice_verification_threshold
+                # actually retunable from here: `config set` never parsed a float value at
+                # all (only bool and plain-digit int), so e.g.
+                # "config set voice_verification_threshold 0.65" silently fell through to
+                # config_set() as the *string* "0.65", which validate_change() rejects for
+                # every float-typed setting -- "Configuration change rejected." with no
+                # indication a parsing gap, not a bad value, was the reason. A value that
+                # isn't a recognized bool/int and doesn't parse as a float is left as a
+                # string, so every existing string-valued key (model names, paths, etc.) is
+                # unaffected.
+                try:
+                    value = float(value)
+                except ValueError:
+                    pass
             return config_set(parts[2], value)
 
         if normalized_command == "plugins list":
