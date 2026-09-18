@@ -391,6 +391,119 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertIn("device 12", str(context.exception))
 
 
+class VoiceRecordingDiagnosticsTests(unittest.TestCase):
+    """RFC-009 instability investigation: real-hardware logs showed `voice talk` similarity
+    swing 0.684 -> 0.373 -> 0.202 across consecutive attempts against the *same* enrolled
+    owner, with `voice_verification_threshold` unchanged at 0.6. Per the explicit
+    instruction accompanying that report, these are diagnostics-only tests -- they do not
+    touch the threshold or disable/bypass verification -- covering the new per-recording
+    logging that lets a real run's logs show which of the suspected causes (silence,
+    clipping, per-channel imbalance, insufficient speech activity within the fixed capture
+    window) actually explains a given attempt's low similarity. Because
+    `record_from_microphone()` is shared by both `voice enroll` and `voice talk`, this
+    logging automatically applies identically to both, which is itself the check for
+    "do enrollment and verification use the same preprocessing".
+    """
+
+    def setUp(self) -> None:
+        reset_runtime_config()
+        set_runtime_config_value("voice_input_device", 1)
+        set_runtime_config_value("voice_input_sample_rate", 44100)
+        set_runtime_config_value("voice_input_channels", 4)
+
+    def tearDown(self) -> None:
+        reset_runtime_config()
+
+    def test_record_from_microphone_logs_native_and_preprocessed_diagnostics(self) -> None:
+        import numpy as np
+        import sounddevice as sd
+
+        from app.brain.voice import audio_io
+
+        def fake_rec(frame_count, samplerate, channels, dtype, device=None):
+            return np.full((frame_count, channels), 0.3, dtype=dtype)
+
+        with patch.object(sd, "rec", side_effect=fake_rec), patch.object(sd, "wait", return_value=None):
+            with self.assertLogs("app.brain.voice.audio_io", level="INFO") as logs:
+                audio_io.record_from_microphone(1.0, sample_rate=VOICE_SAMPLE_RATE_HZ)
+
+        joined = "\n".join(logs.output)
+        self.assertIn("Voice recording diagnostics (native_capture):", joined)
+        self.assertIn("Voice recording diagnostics (preprocessed):", joined)
+        for field in ("shape=", "sample_rate=", "channels=", "duration=", "min=", "max=", "peak=", "rms=", "n_samples="):
+            self.assertIn(field, joined)
+
+    def test_record_from_microphone_warns_on_very_quiet_signal(self) -> None:
+        import numpy as np
+        import sounddevice as sd
+
+        from app.brain.voice import audio_io
+
+        def fake_rec(frame_count, samplerate, channels, dtype, device=None):
+            return np.full((frame_count, channels), 0.0005, dtype=dtype)
+
+        with patch.object(sd, "rec", side_effect=fake_rec), patch.object(sd, "wait", return_value=None):
+            with self.assertLogs("app.brain.voice.audio_io", level="WARNING") as logs:
+                audio_io.record_from_microphone(1.0, sample_rate=VOICE_SAMPLE_RATE_HZ)
+
+        self.assertTrue(any("very quiet" in message for message in logs.output))
+
+    def test_record_from_microphone_warns_on_clipping(self) -> None:
+        import numpy as np
+        import sounddevice as sd
+
+        from app.brain.voice import audio_io
+
+        def fake_rec(frame_count, samplerate, channels, dtype, device=None):
+            return np.full((frame_count, channels), 0.999, dtype=dtype)
+
+        with patch.object(sd, "rec", side_effect=fake_rec), patch.object(sd, "wait", return_value=None):
+            with self.assertLogs("app.brain.voice.audio_io", level="WARNING") as logs:
+                audio_io.record_from_microphone(1.0, sample_rate=VOICE_SAMPLE_RATE_HZ)
+
+        self.assertTrue(any("clipping" in message for message in logs.output))
+
+    def test_record_from_microphone_warns_on_uneven_channel_levels(self) -> None:
+        import numpy as np
+        import sounddevice as sd
+
+        from app.brain.voice import audio_io
+
+        def fake_rec(frame_count, samplerate, channels, dtype, device=None):
+            recording = np.full((frame_count, channels), 0.3, dtype=dtype)
+            recording[:, 0] = 0.0  # one channel picking up (near-)nothing this attempt
+            return recording
+
+        with patch.object(sd, "rec", side_effect=fake_rec), patch.object(sd, "wait", return_value=None):
+            with self.assertLogs("app.brain.voice.audio_io", level="WARNING") as logs:
+                audio_io.record_from_microphone(1.0, sample_rate=VOICE_SAMPLE_RATE_HZ)
+
+        self.assertTrue(any("Uneven per-channel levels" in message for message in logs.output))
+
+    def test_estimate_speech_activity_reports_leading_and_trailing_silence(self) -> None:
+        from app.brain.voice.audio_io import _estimate_speech_activity
+
+        sample_rate = 16000
+        silence = [0.0] * (sample_rate // 2)  # 0.5s
+        speech = [0.5] * sample_rate  # 1.0s of "loud" signal
+        samples = silence + speech + silence
+
+        active_ratio, leading_silence_s, trailing_silence_s = _estimate_speech_activity(samples, sample_rate)
+
+        self.assertGreater(active_ratio, 0.3)
+        self.assertLess(active_ratio, 1.0)
+        self.assertAlmostEqual(leading_silence_s, 0.5, delta=0.05)
+        self.assertAlmostEqual(trailing_silence_s, 0.5, delta=0.05)
+
+    def test_estimate_speech_activity_handles_empty_and_fully_silent_input(self) -> None:
+        from app.brain.voice.audio_io import _estimate_speech_activity
+
+        self.assertEqual(_estimate_speech_activity([], 16000), (0.0, 0.0, 0.0))
+        active_ratio, leading_silence_s, _trailing_silence_s = _estimate_speech_activity([0.0] * 16000, 16000)
+        self.assertEqual(active_ratio, 0.0)
+        self.assertAlmostEqual(leading_silence_s, 1.0, delta=0.01)
+
+
 class VoiceControllerProviderCachingTests(unittest.TestCase):
     """Regression coverage for the "voice talk always rejects the enrolled owner"
     investigation: VoiceController.verification_provider() used to construct a brand-new
