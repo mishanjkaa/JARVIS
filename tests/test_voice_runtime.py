@@ -504,6 +504,97 @@ class VoiceRecordingDiagnosticsTests(unittest.TestCase):
         self.assertAlmostEqual(leading_silence_s, 1.0, delta=0.01)
 
 
+class VoiceSilenceTrimFixTests(unittest.TestCase):
+    """Root-cause fix, confirmed by real-hardware logs gathered via the diagnostics above:
+    every live `voice talk` recording had active_speech_ratio between 0.115 and 0.200 (i.e.
+    80-88% silence/room noise inside the fixed 6-second capture window), with leading
+    silence 0.87-1.2s and trailing silence 2.79-3.84s that varied unpredictably between
+    attempts -- while clipping_ratio was 0.0 and per-channel peaks were even, ruling out a
+    mic-level cause. `_trim_silence()` crops each recording down to its speech-bearing
+    region (plus a small padding) before it reaches STT/speaker verification, so the
+    encoder always sees a consistent, speech-dense clip instead of a different, unpredictable
+    silence ratio every attempt. `voice_verification_threshold` is untouched (still 0.6) and
+    verification is not disabled anywhere in this fix."""
+
+    def setUp(self) -> None:
+        reset_runtime_config()
+        set_runtime_config_value("voice_input_device", 1)
+        set_runtime_config_value("voice_input_sample_rate", 44100)
+        set_runtime_config_value("voice_input_channels", 4)
+
+    def tearDown(self) -> None:
+        reset_runtime_config()
+
+    def test_trim_silence_crops_leading_and_trailing_silence(self) -> None:
+        from app.brain.voice.audio_io import _trim_silence
+
+        sample_rate = 16000
+        silence = [0.0] * sample_rate  # 1.0s
+        speech = [0.3] * sample_rate  # 1.0s
+        samples = silence + speech + silence  # 3.0s total, 1.0s of it real signal
+
+        trimmed = _trim_silence(samples, sample_rate)
+
+        # Well under the untrimmed 3.0s, but comfortably covers the 1.0s of speech plus
+        # the padding on each side.
+        self.assertLess(len(trimmed), len(samples))
+        self.assertGreater(len(trimmed), sample_rate)
+        self.assertLess(len(trimmed), int(1.6 * sample_rate))
+        interior = trimmed[len(trimmed) // 4 : -(len(trimmed) // 4)]
+        self.assertTrue(all(abs(value - 0.3) < 1e-6 for value in interior))
+
+    def test_trim_silence_leaves_fully_active_signal_untouched(self) -> None:
+        from app.brain.voice.audio_io import _trim_silence
+
+        samples = [0.25] * 16000
+        self.assertEqual(_trim_silence(samples, 16000), samples)
+
+    def test_trim_silence_falls_back_to_untouched_on_fully_silent_input(self) -> None:
+        from app.brain.voice.audio_io import _trim_silence
+
+        samples = [0.0] * 16000
+        self.assertEqual(_trim_silence(samples, 16000), samples)
+
+    def test_trim_silence_falls_back_when_result_would_be_too_short(self) -> None:
+        from app.brain.voice.audio_io import _trim_silence
+
+        sample_rate = 16000
+        # A single very brief blip of signal surrounded by silence: trimming down to just
+        # that blip (plus padding) would leave well under MIN_TRIMMED_SECONDS, so the
+        # original (untrimmed) audio must be returned instead of an almost-empty clip.
+        samples = [0.0] * sample_rate + [0.3] * int(0.05 * sample_rate) + [0.0] * sample_rate
+        self.assertEqual(_trim_silence(samples, sample_rate), samples)
+
+    def test_record_from_microphone_trims_silence_surrounding_speech(self) -> None:
+        import numpy as np
+        import sounddevice as sd
+
+        from app.brain.voice import audio_io
+
+        def fake_rec(frame_count, samplerate, channels, dtype, device=None):
+            # 6s native capture: 2s silence, 2s of signal, 2s silence -- matching the shape
+            # of the real field recordings that exposed this bug (mostly silence, a real
+            # utterance somewhere in the middle, differing start/end silence each attempt).
+            segment = frame_count // 3
+            recording = np.zeros((frame_count, channels), dtype=dtype)
+            recording[segment : 2 * segment, :] = 0.3
+            return recording
+
+        with patch.object(sd, "rec", side_effect=fake_rec), patch.object(sd, "wait", return_value=None):
+            with self.assertLogs("app.brain.voice.audio_io", level="INFO") as logs:
+                samples = audio_io.record_from_microphone(6.0, sample_rate=VOICE_SAMPLE_RATE_HZ)
+
+        full_length = int(6.0 * VOICE_SAMPLE_RATE_HZ)
+        # The trimmed recording must be meaningfully shorter than the untrimmed 6s window --
+        # this is the actual fix, not just a diagnostic -- while still comfortably covering
+        # the ~2s of real signal plus padding.
+        self.assertLess(len(samples), full_length // 2)
+        self.assertGreater(len(samples), int(1.5 * VOICE_SAMPLE_RATE_HZ))
+        joined = "\n".join(logs.output)
+        self.assertIn("Trimmed", joined)
+        self.assertIn("Voice recording diagnostics (trimmed):", joined)
+
+
 class VoiceControllerProviderCachingTests(unittest.TestCase):
     """Regression coverage for the "voice talk always rejects the enrolled owner"
     investigation: VoiceController.verification_provider() used to construct a brand-new

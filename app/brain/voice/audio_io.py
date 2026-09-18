@@ -65,6 +65,39 @@ def _downmix_to_mono(recording, channels: int) -> list[float]:
 # capture/downmix/resample pipeline above. Because `record_from_microphone()` is the one
 # function used by both `voice enroll` and `voice talk`, wiring these into it produces
 # directly comparable log lines for enrollment and live-verification recordings alike.
+def _compute_window_activity(
+    arr, sample_rate: int, *, window_ms: float = 30.0, threshold_ratio: float = 0.1
+) -> tuple[list[bool], int]:
+    """Shared sliding-window energy-based activity detector underlying both
+    `_estimate_speech_activity()` (diagnostics) and `_trim_silence()` (the fix below) --
+    kept as one function so the silence boundaries reported in the logs always match the
+    boundaries actually used to trim audio. A window is "active" when its RMS is at least
+    `threshold_ratio` of the recording's own peak amplitude. Returns an empty list when
+    there is nothing to analyze, and a list of all-`False` (with the recording's actual
+    window size) when the recording has no signal at all (peak == 0)."""
+    import numpy as np
+
+    if sample_rate <= 0 or arr.size == 0:
+        return [], 0
+
+    window_size = max(1, int(sample_rate * window_ms / 1000.0))
+    n_windows = int(np.ceil(arr.size / window_size))
+    if n_windows == 0:
+        return [], window_size
+
+    peak = float(np.abs(arr).max())
+    if peak <= 0.0:
+        return [False] * n_windows, window_size
+
+    threshold = peak * threshold_ratio
+    activity = []
+    for i in range(n_windows):
+        window = arr[i * window_size : (i + 1) * window_size]
+        window_rms = float(np.sqrt(np.mean(window.astype(np.float64) ** 2))) if window.size else 0.0
+        activity.append(window_rms >= threshold)
+    return activity, window_size
+
+
 def _estimate_speech_activity(
     samples: list[float], sample_rate: int, *, window_ms: float = 30.0, threshold_ratio: float = 0.1
 ) -> tuple[float, float, float]:
@@ -82,21 +115,11 @@ def _estimate_speech_activity(
         return 0.0, 0.0, 0.0
 
     arr = np.asarray(samples, dtype=np.float32)
-    peak = float(np.abs(arr).max())
-    if peak <= 0.0:
-        return 0.0, len(arr) / sample_rate, 0.0
-
-    window_size = max(1, int(sample_rate * window_ms / 1000.0))
-    n_windows = int(np.ceil(arr.size / window_size))
-    if n_windows == 0:
+    activity, window_size = _compute_window_activity(arr, sample_rate, window_ms=window_ms, threshold_ratio=threshold_ratio)
+    if not activity:
         return 0.0, 0.0, 0.0
-
-    activity = []
-    threshold = peak * threshold_ratio
-    for i in range(n_windows):
-        window = arr[i * window_size : (i + 1) * window_size]
-        window_rms = float(np.sqrt(np.mean(window.astype(np.float64) ** 2))) if window.size else 0.0
-        activity.append(window_rms >= threshold)
+    if not any(activity):
+        return 0.0, len(arr) / sample_rate, 0.0
 
     active_ratio = sum(activity) / len(activity)
 
@@ -114,6 +137,65 @@ def _estimate_speech_activity(
 
     window_seconds = window_size / sample_rate
     return active_ratio, leading_silence_windows * window_seconds, trailing_silence_windows * window_seconds
+
+
+# RFC-009 verification-instability root cause (confirmed on real hardware after the
+# diagnostics above were deployed): every live `voice talk` recording showed
+# active_speech_ratio between 0.115 and 0.200 -- i.e. 80-88% of the fixed 6-second capture
+# window was silence/room noise, not speech -- with 0.87-1.2s of leading silence and
+# 2.79-3.84s of trailing silence that varied unpredictably between attempts. No clipping,
+# no per-channel imbalance, and the signal was not too quiet (peak 0.15-0.28, well above
+# the "very quiet" threshold) -- so this is not a mic-level problem, it's a content
+# problem: `voice talk` starts recording for a fixed duration immediately, with no "get
+# ready" cue, so how much silence surrounds the actual utterance -- and therefore what
+# fraction of the waveform SpeechBrain's ECAPA-TDNN encoder actually has to work with --
+# depends purely on when the user happens to start/stop talking relative to that fixed
+# window. Feeding the encoder a waveform that is mostly silence, in a different ratio and
+# position every time, produces a correspondingly unstable embedding even for the same
+# genuine speaker. `voice_verification_threshold` was left at 0.6 throughout this
+# investigation, exactly as instructed.
+MIN_TRIMMED_SECONDS = 0.5
+
+
+def _trim_silence(
+    samples: list[float],
+    sample_rate: int,
+    *,
+    window_ms: float = 30.0,
+    threshold_ratio: float = 0.1,
+    padding_seconds: float = 0.2,
+) -> list[float]:
+    """Crops leading/trailing silence from a recording down to its speech-bearing region
+    (plus `padding_seconds` on each side), using the same energy-based window activity as
+    `_estimate_speech_activity()` so the trim boundaries always match what the diagnostics
+    log. This normalizes what SpeechBrain/faster-whisper actually see across every
+    recording -- enrollment and every `voice talk` attempt alike, since both call
+    `record_from_microphone()` -- instead of each attempt handing the encoder a different,
+    unpredictable ratio of real speech to silence. Falls back to returning the audio
+    untouched if no activity is detected at all, or if trimming would leave less than
+    `MIN_TRIMMED_SECONDS` of audio, rather than risk handing the encoder an almost-empty
+    clip."""
+    import numpy as np
+
+    if not samples or sample_rate <= 0:
+        return samples
+
+    arr = np.asarray(samples, dtype=np.float32)
+    activity, window_size = _compute_window_activity(arr, sample_rate, window_ms=window_ms, threshold_ratio=threshold_ratio)
+    if not activity or not any(activity):
+        return samples
+
+    first_active = next(i for i, is_active in enumerate(activity) if is_active)
+    last_active = len(activity) - 1 - next(i for i, is_active in enumerate(reversed(activity)) if is_active)
+
+    padding_samples = int(padding_seconds * sample_rate)
+    start = max(0, first_active * window_size - padding_samples)
+    end = min(arr.size, (last_active + 1) * window_size + padding_samples)
+
+    if (end - start) < int(MIN_TRIMMED_SECONDS * sample_rate):
+        return samples
+
+    return arr[start:end].tolist()
 
 
 def _log_channel_diagnostics(recording, *, channels: int) -> None:
@@ -206,7 +288,11 @@ def record_from_microphone(duration_seconds: float, *, sample_rate: int = VOICE_
     (see the hardware note above) and only then downmixes to mono and resamples to
     `sample_rate` (16 kHz by default, what STT/speaker verification require) in software --
     never by asking PortAudio to capture directly in that target format, which silently
-    produces near-silent audio on at least one real target device."""
+    produces near-silent audio on at least one real target device. Finally trims leading and
+    trailing silence (see `_trim_silence` above) so STT/speaker verification always receive a
+    speech-dense clip instead of a fixed-duration window padded with an unpredictable amount
+    of silence/room noise -- confirmed on real hardware to be the cause of unstable
+    `voice talk` speaker-verification similarity scores between consecutive attempts."""
     duration_seconds = min(max(duration_seconds, 0.1), MAX_PUSH_TO_TALK_SECONDS)
     state = get_voice_state()
     try:
@@ -247,7 +333,18 @@ def record_from_microphone(duration_seconds: float, *, sample_rate: int = VOICE_
 
     preprocessed = resample_audio(mono_native, native_sample_rate, sample_rate)
     _log_recording_diagnostics(preprocessed, sample_rate=sample_rate, channels=1, stage="preprocessed")
-    return preprocessed
+
+    trimmed = _trim_silence(preprocessed, sample_rate)
+    if len(trimmed) != len(preprocessed):
+        logger.info(
+            "Trimmed %.3fs of leading/trailing silence from recording (%.3fs -> %.3fs) before "
+            "handing audio to STT/speaker verification.",
+            (len(preprocessed) - len(trimmed)) / sample_rate if sample_rate else 0.0,
+            len(preprocessed) / sample_rate if sample_rate else 0.0,
+            len(trimmed) / sample_rate if sample_rate else 0.0,
+        )
+    _log_recording_diagnostics(trimmed, sample_rate=sample_rate, channels=1, stage="trimmed")
+    return trimmed
 
 
 def play_audio_wav(wav_bytes: bytes) -> None:
