@@ -37,6 +37,7 @@ MUTABLE_KEYS = {
     # directly and is redacted (never echoed) by config_show()/config_get().
     "location_enabled", "location_bind_host", "location_port", "location_stale_after_seconds", "osrm_base_url",
     "voice_stt_model", "voice_tts_voice", "voice_verification_threshold",
+    "voice_input_device", "voice_input_sample_rate", "voice_input_channels",
 }
 
 
@@ -54,6 +55,12 @@ def validate_change(key: str, value: object) -> object:
     if key in {"location_bind_host", "voice_tts_voice"} and (not isinstance(value, str) or len(value) > 260):
         raise ValueError("configuration value has invalid type")
     if key == "voice_verification_threshold" and (not isinstance(value, (int, float)) or isinstance(value, bool) or not 0.0 <= float(value) <= 1.0):
+        raise ValueError("configuration value has invalid range")
+    if key == "voice_input_device" and (not isinstance(value, int) or isinstance(value, bool) or value < 0 or value > 255):
+        raise ValueError("configuration value has invalid range")
+    if key == "voice_input_sample_rate" and (not isinstance(value, int) or isinstance(value, bool) or not 8000 <= value <= 192000):
+        raise ValueError("configuration value has invalid range")
+    if key == "voice_input_channels" and (not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 8):
         raise ValueError("configuration value has invalid range")
     return value
 _ALLOWED_KEYS = {
@@ -148,6 +155,9 @@ _ALLOWED_KEYS = {
     "voice_stt_model",
     "voice_tts_voice",
     "voice_verification_threshold",
+    "voice_input_device",
+    "voice_input_sample_rate",
+    "voice_input_channels",
 }
 
 
@@ -248,6 +258,9 @@ def get_runtime_config() -> dict[str, Any]:
         "voice_stt_model": "small",
         "voice_tts_voice": "",
         "voice_verification_threshold": 0.75,
+        "voice_input_device": 1,
+        "voice_input_sample_rate": 44100,
+        "voice_input_channels": 4,
     }
 
 
@@ -281,6 +294,12 @@ def set_runtime_config_value(key: str, value: Any) -> dict[str, Any]:
     if key in {"vision_model", "location_bind_host", "voice_tts_voice"} and not isinstance(value, str):
         raise ValueError("invalid value")
     if key == "voice_verification_threshold" and (not isinstance(value, (int, float)) or isinstance(value, bool) or not 0.0 <= float(value) <= 1.0):
+        raise ValueError("invalid value")
+    if key == "voice_input_device" and (not isinstance(value, int) or isinstance(value, bool) or value < 0 or value > 255):
+        raise ValueError("invalid value")
+    if key == "voice_input_sample_rate" and (not isinstance(value, int) or isinstance(value, bool) or not 8000 <= value <= 192000):
+        raise ValueError("invalid value")
+    if key == "voice_input_channels" and (not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 8):
         raise ValueError("invalid value")
     if key in {"voice_enabled", "ai_enabled", "ai_allow_conversation", "show_plan_preview", "agent_enabled", "agent_allow_persistent_actions", "filesystem_enabled", "filesystem_soft_delete", "developer_mode", "auto_execute_low_risk", "auto_execute_medium_project", "terminal_enabled", "terminal_allow_python", "terminal_allow_git_read_only", "terminal_allow_package_install_with_approval", "browser_enabled", "browser_headless_default", "browser_allow_http", "browser_screenshot_overwrite", "vision_enabled", "vision_browser_capture_enabled", "intelligence_enabled", "intelligence_require_structured_output", "intelligence_allow_goal_evaluation", "intelligence_allow_heuristic_fallback", "intelligence_fail_closed", "memory_learned_capture_enabled", "vision_desktop_capture_enabled", "location_enabled"} and not isinstance(value, bool):
         raise ValueError("invalid value")

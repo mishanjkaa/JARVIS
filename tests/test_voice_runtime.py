@@ -246,7 +246,7 @@ class VoiceRuntimeTests(unittest.TestCase):
 
         seen_active = []
 
-        def fake_rec(frame_count, samplerate, channels, dtype):
+        def fake_rec(frame_count, samplerate, channels, dtype, device=None):
             seen_active.append(get_voice_state().mic_active)
             return np.zeros((frame_count, channels), dtype=dtype)
 
@@ -255,3 +255,69 @@ class VoiceRuntimeTests(unittest.TestCase):
             audio_io.record_from_microphone(0.1)
             self.assertFalse(get_voice_state().mic_active)
         self.assertEqual(seen_active, [True])
+
+    # --- native-format capture: multi-channel downmix + resample --------------
+
+    def test_record_from_microphone_uses_configured_native_device_settings(self) -> None:
+        import numpy as np
+        import sounddevice as sd
+
+        from app.brain.voice import audio_io
+
+        set_runtime_config_value("voice_input_device", 1)
+        set_runtime_config_value("voice_input_sample_rate", 44100)
+        set_runtime_config_value("voice_input_channels", 4)
+        seen_calls = []
+
+        def fake_rec(frame_count, samplerate, channels, dtype, device=None):
+            seen_calls.append({"frame_count": frame_count, "samplerate": samplerate, "channels": channels, "device": device})
+            return np.zeros((frame_count, channels), dtype=dtype)
+
+        with patch.object(sd, "rec", side_effect=fake_rec), patch.object(sd, "wait", return_value=None):
+            audio_io.record_from_microphone(1.0)
+        self.assertEqual(len(seen_calls), 1)
+        call = seen_calls[0]
+        self.assertEqual(call["device"], 1)
+        self.assertEqual(call["samplerate"], 44100)
+        self.assertEqual(call["channels"], 4)
+        self.assertEqual(call["frame_count"], 44100)
+
+    def test_record_from_microphone_downmixes_and_resamples_to_target_rate(self) -> None:
+        import numpy as np
+        import sounddevice as sd
+
+        from app.brain.voice import audio_io
+
+        set_runtime_config_value("voice_input_device", 1)
+        set_runtime_config_value("voice_input_sample_rate", 44100)
+        set_runtime_config_value("voice_input_channels", 4)
+
+        def fake_rec(frame_count, samplerate, channels, dtype, device=None):
+            # A constant, non-zero signal on every channel -- averaging channels and
+            # resampling a constant signal should still be (approximately) that constant,
+            # which is enough to prove the downmix and resample both actually ran rather
+            # than the raw 4-channel 44.1kHz buffer being handed straight to the caller.
+            return np.full((frame_count, channels), 0.25, dtype=dtype)
+
+        with patch.object(sd, "rec", side_effect=fake_rec), patch.object(sd, "wait", return_value=None):
+            samples = audio_io.record_from_microphone(1.0, sample_rate=VOICE_SAMPLE_RATE_HZ)
+        # ~16000 samples for a 1s capture resampled to 16 kHz, not the native 44100.
+        self.assertAlmostEqual(len(samples), VOICE_SAMPLE_RATE_HZ, delta=200)
+        interior = samples[50:-50]
+        self.assertTrue(all(abs(value - 0.25) < 0.05 for value in interior))
+
+    def test_record_from_microphone_reports_device_on_failure(self) -> None:
+        import sounddevice as sd
+
+        from app.brain.voice import audio_io
+        from app.brain.voice.errors import VoiceCaptureError
+
+        set_runtime_config_value("voice_input_device", 12)
+
+        def fake_rec(frame_count, samplerate, channels, dtype, device=None):
+            raise OSError("Invalid number of channels")
+
+        with patch.object(sd, "rec", side_effect=fake_rec):
+            with self.assertRaises(VoiceCaptureError) as context:
+                audio_io.record_from_microphone(1.0)
+        self.assertIn("device 12", str(context.exception))

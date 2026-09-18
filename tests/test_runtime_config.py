@@ -77,6 +77,33 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertEqual(config["vision_browser_capture_ttl_seconds"], 240)
         self.assertEqual(config["vision_browser_capture_enabled"], False)
 
+    def test_voice_input_device_settings_persist(self) -> None:
+        # RFC-009 mic pipeline fix: the native capture device/rate/channel-count are
+        # configurable, defaulting to 1/44100/4 -- see app.brain.voice.audio_io.
+        self.assertEqual(get_effective_runtime_config()["voice_input_device"], 1)
+        self.assertEqual(get_effective_runtime_config()["voice_input_sample_rate"], 44100)
+        self.assertEqual(get_effective_runtime_config()["voice_input_channels"], 4)
+        self.assertEqual(route_command("config set voice_input_device 2"), "Configuration updated: voice_input_device.")
+        self.assertEqual(route_command("config set voice_input_sample_rate 48000"), "Configuration updated: voice_input_sample_rate.")
+        self.assertEqual(route_command("config set voice_input_channels 2"), "Configuration updated: voice_input_channels.")
+        self.assertEqual(load_config()["voice_input_device"], 2)
+        self.assertEqual(load_config()["voice_input_sample_rate"], 48000)
+        self.assertEqual(load_config()["voice_input_channels"], 2)
+        reset_runtime_config()
+        config = get_effective_runtime_config()
+        self.assertEqual(config["voice_input_device"], 2)
+        self.assertEqual(config["voice_input_sample_rate"], 48000)
+        self.assertEqual(config["voice_input_channels"], 2)
+
+    def test_voice_input_device_accepts_zero_but_rejects_out_of_range(self) -> None:
+        # Device index 0 is a legitimate PortAudio device (the first one) and must not be
+        # treated as falsy/invalid the way most other voice_* integer settings treat 0.
+        self.assertEqual(route_command("config set voice_input_device 0"), "Configuration updated: voice_input_device.")
+        self.assertEqual(load_config()["voice_input_device"], 0)
+        self.assertEqual(route_command("config set voice_input_device -1"), "Configuration change rejected.")
+        self.assertEqual(route_command("config set voice_input_channels 0"), "Configuration change rejected.")
+        self.assertEqual(route_command("config set voice_input_sample_rate 1000"), "Configuration change rejected.")
+
     def test_failed_writes_preserve_last_valid_configuration(self) -> None:
         self.assertEqual(route_command("config set vision_model qwen2.5vl:3b"), "Configuration updated: vision_model.")
         with patch("app.brain.configuration.config_commands.write_config", return_value=False):

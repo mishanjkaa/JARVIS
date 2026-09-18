@@ -108,5 +108,11 @@ RFC-009 keeps voice configuration in its own `voice_*` family. `voice_enabled` (
   Filesystem path to a downloaded Piper `.onnx` voice model. Empty (the default) means text-to-speech is unavailable until the operator downloads a voice and sets this — the same "operator provides the model" convention as Ollama.
 - `voice_verification_threshold`
   Minimum cosine similarity (0.0-1.0) between a live utterance's speaker embedding and the enrolled owner's stored embedding before a voice turn is accepted. Default `0.75`.
+- `voice_input_device`
+  PortAudio input device index used for local microphone capture (`voice enroll`, `voice talk`). Default `1`. Confirmed on a real Windows 11 target machine: some built-in "Microphone Array" hardware exposes two PortAudio device indices for the same physical mic — a plain index that records real signal and a separate WASAPI-variant index that either refuses the requested channel count outright or, if opened at a non-native format, returns near-silent audio. `voice_input_device` should point at the plain (non-WASAPI) index; run `python -m sounddevice` in the same environment JARVIS runs in to list device indices/names if unsure.
+- `voice_input_sample_rate`
+  The input device's own native sample rate in Hz (8000-192000). Default `44100`. Recording always happens at this native rate and is resampled in software to the 16 kHz `faster-whisper`/SpeechBrain expect — never captured directly at 16 kHz, which silently produced near-silent audio on the array-mic hardware above.
+- `voice_input_channels`
+  The input device's own native channel count (1-8). Default `4`, matching a typical laptop array mic. Captured audio is downmixed to mono (channel average) in software before transcription/verification.
 
 Voice enrollment (`voice enroll`, `voice forget me`) stores a single averaged speaker embedding in `data/voice_profile.json` — never raw audio. See `docs/RFC-009_ON_DEMAND_VOICE_ASSISTANT.md` for the full hard-boundary rationale (only the enrolled owner's voice is ever processed) and the Phase 0 library choices.

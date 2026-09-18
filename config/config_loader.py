@@ -92,6 +92,9 @@ def load_config(path: Path | str | None = None) -> dict[str, Any]:
         "vision_desktop_capture_max_pixels": (1, 33_554_432),
         "location_port": (1, 65535),
         "location_stale_after_seconds": (1, 86400),
+        "voice_input_device": (0, 255),
+        "voice_input_sample_rate": (8000, 192000),
+        "voice_input_channels": (1, 8),
     }
     float_ranges = {
         "voice_verification_threshold": (0.0, 1.0),
