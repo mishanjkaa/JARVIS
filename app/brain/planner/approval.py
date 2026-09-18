@@ -174,15 +174,33 @@ def _synchronize_terminal_pending_state_locked(*, status: str, message: str) -> 
 
 
 def _cleanup_vision_captures_for_task(task) -> None:
-    """RFC-007B: release any temporary vision captures owned by a task whose approval
-    expired or was cancelled before reuse, mirroring
-    AgentController._cleanup_browser_captures_for_task."""
+    """RFC-007B/RFC-007C: release any temporary vision captures owned by a task whose
+    approval expired or was cancelled before reuse, mirroring
+    AgentController._cleanup_browser_captures_for_task and
+    AgentController._cleanup_desktop_captures_for_task. Browser and desktop cleanup are
+    independent so a failure in one can never suppress the other."""
     try:
         from app.brain.vision.controller import get_vision_controller
 
         removed = get_vision_controller().cleanup_captures_for_task(owner_agent_task_id=task.task_id)
     except Exception:
         record_audit_event("vision_capture_cleanup_failed", task_id=task.task_id, message="task capture cleanup failed")
+    else:
+        if removed:
+            record_audit_event("vision_capture_cleanup_completed", task_id=task.task_id, message=f"{removed} capture(s)")
+    _cleanup_desktop_vision_captures_for_task(task)
+
+
+def _cleanup_desktop_vision_captures_for_task(task) -> None:
+    """RFC-007C: release any temporary desktop/window captures owned by a task whose
+    approval expired or was cancelled before reuse, mirroring
+    AgentController._cleanup_desktop_captures_for_task."""
+    try:
+        from app.brain.vision.controller import get_vision_controller
+
+        removed = get_vision_controller().cleanup_desktop_captures_for_task(owner_agent_task_id=task.task_id)
+    except Exception:
+        record_audit_event("vision_desktop_capture_cleanup_failed", task_id=task.task_id, message="task desktop capture cleanup failed")
         return
     if removed:
-        record_audit_event("vision_capture_cleanup_completed", task_id=task.task_id, message=f"{removed} capture(s)")
+        record_audit_event("vision_desktop_capture_cleanup_completed", task_id=task.task_id, message=f"{removed} capture(s)")

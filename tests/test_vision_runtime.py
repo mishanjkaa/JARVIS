@@ -39,7 +39,7 @@ from app.brain.tools.registry import ToolRegistry
 from app.brain.vision.controller import get_vision_controller, reset_vision_controller
 from app.brain.vision.errors import VisionEvidenceExpiredError, VisionProviderError, VisionProviderUnavailableError
 from app.brain.vision.image_loader import cleanup_loaded_image, crop_loaded_image, load_local_image
-from app.brain.vision.models import BrowserCaptureRecord, VisionBoundingBox, VisionCropObservation, VisionEvidence, VisionFrame, VisionObservedObject, VisionOcrBlock, VisionProviderStatus, VisionRegion
+from app.brain.vision.models import BrowserCaptureRecord, DesktopCaptureRecord, VisionBoundingBox, VisionCropObservation, VisionEvidence, VisionFrame, VisionObservedObject, VisionOcrBlock, VisionProviderStatus, VisionRegion
 from app.brain.vision.ollama_provider import OllamaVisionProvider
 from app.brain.vision.state import get_vision_state, reset_vision_state
 from tests.fixtures.generate_vision_fixture import FIXTURE_TEXT, HEIGHT as FIXTURE_HEIGHT, WIDTH as FIXTURE_WIDTH
@@ -2007,6 +2007,66 @@ class VisionRuntimeTests(unittest.TestCase):
             self.assertEqual(expired, "The pending plan expired.")
 
             self.assertNotIn(capture.capture_id, get_vision_state().captures)
+        finally:
+            reset_planner_now_provider()
+            reset_planner_state()
+
+    def test_approval_expiration_cleans_up_desktop_captures_for_the_cancelled_task(self) -> None:
+        # Regression test: RFC-007C desktop captures have the same "approval expiration
+        # before reuse" cleanup requirement as RFC-007B browser captures (see the sibling
+        # test above), but the desktop-capture cleanup call was added to
+        # AgentController.cancel_pending_or_running_task() in a separate, parallel commit
+        # that never cross-referenced approval.py's cleanup path, leaving desktop captures
+        # stranded when a pending plan simply timed out instead of being cancelled.
+        reset_planner_state()
+        clock = _FakePlannerClock()
+        set_planner_now_provider(clock.now)
+        try:
+            plan = AgentPlan(steps=[
+                AgentStep(
+                    step_id=1,
+                    tool_name="memory.remember",
+                    arguments={"key": "project", "value": "JARVIS"},
+                    risk_level="persistent_write",
+                    user_visible_description="Remember project.",
+                ),
+            ])
+            summary = store_pending_plan(plan)
+            self.assertIn("Pending plan:", summary)
+            task = get_agent_runtime_state().current_task
+            self.assertIsNotNone(task)
+            self.assertEqual(task.state.value, "pending_approval")
+            task_id = task.task_id
+
+            # No plan step executes before approval, so a capture "for this task" has to be
+            # simulated directly against vision state rather than produced by real execution.
+            now = datetime.now(timezone.utc)
+            capture = DesktopCaptureRecord(
+                capture_id="desktop-capture-approval-expiry-test",
+                owner_request_id=None,
+                owner_agent_task_id=task_id,
+                source_type="desktop_screen",
+                window_id=None,
+                window_title="",
+                width=1920,
+                height=1080,
+                captured_at=now.isoformat(),
+                expires_at=(now + timedelta(minutes=5)).isoformat(),
+                image_format="png",
+                source_hash="deadbeef",
+                byte_size=123,
+                mime_type="image/png",
+                safe_display_name="desktop-capture-approval-expiry-test.png",
+            )
+            state = get_vision_state()
+            with state.lock:
+                state.desktop_captures[capture.capture_id] = capture
+
+            clock.advance(seconds=61)
+            expired = route_command("approve plan")
+            self.assertEqual(expired, "The pending plan expired.")
+
+            self.assertNotIn(capture.capture_id, get_vision_state().desktop_captures)
         finally:
             reset_planner_now_provider()
             reset_planner_state()
