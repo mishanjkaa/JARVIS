@@ -160,12 +160,24 @@ class VoiceController:
     # --- voice turns ----------------------------------------------------------
 
     def handle_voice_turn(self, samples: list[float], *, route_text: Callable[[str], str]) -> VoiceTurnResult:
-        """Verify the speaker, transcribe, hand the transcript to `route_text` (the exact
-        same text-intake path a typed message would use -- see RFC-009), synthesize the
-        reply, and return all three. A verification failure raises before any transcription
-        happens, so a non-owner voice never produces or keeps a transcript."""
+        """Transcribe, hand the transcript to `route_text` (the exact same text-intake path
+        a typed message would use -- see RFC-009), synthesize the reply, and return all
+        three.
+
+        Owner speaker verification (`_verify_owner`) only runs when
+        `voice_require_speaker_verification` is enabled. RFC-009's original design ran it
+        unconditionally as a hard boundary (see docs/RFC-009_ON_DEMAND_VOICE_ASSISTANT.md);
+        this was made opt-out at the owner's explicit request, after extensive real-hardware
+        testing showed the enrolled-owner's own genuine similarity score varying widely
+        (0.23-0.68) even with every mechanical cause fixed, making the feature more
+        friction than protection for a single-user local device. Disabling it means *any*
+        voice picked up by the microphone is transcribed and treated as a command -- not
+        just the owner's -- which reintroduces exactly the "processing a second person's
+        speech" concern that hard boundary existed to avoid, so it stays available (and
+        still the safer choice) via `config set voice_require_speaker_verification true`."""
         self._require_enabled()
-        self._verify_owner(samples)
+        if bool(self.effective_config().get("voice_require_speaker_verification", False)):
+            self._verify_owner(samples)
         transcript = self.stt_provider().transcribe(samples, VOICE_SAMPLE_RATE_HZ)
         if not transcript.strip():
             raise VoiceProviderError("No speech was recognized.")
@@ -197,9 +209,11 @@ class VoiceController:
         with state.lock:
             mic_active = state.mic_active
             pending_samples = len(state.pending_enrollment_embeddings)
+        require_verification = bool(config.get("voice_require_speaker_verification", False))
         lines = [
             f"Voice enabled: {'yes' if config.get('voice_enabled', False) else 'no'}",
             f"Microphone active: {'yes' if mic_active else 'no'}",
+            f"Speaker verification required: {'yes' if require_verification else 'no'}",
             f"Owner voice enrolled: {'yes' if self.is_enrolled() else 'no'}",
         ]
         if pending_samples:

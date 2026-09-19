@@ -7,12 +7,26 @@ describes). It reuses the existing Task Interpreter / Planner / Risk Analyzer / 
 Runtime pipeline exactly as every other input channel does — voice is a new way to say
 things to JARVIS, not a new way to bypass how JARVIS decides what to do.
 
-## Hard boundary (read this first)
+## Hard boundary (read this first) — opt-in as of the second real-hardware round
 
-RFC-009 only ever processes the enrolled owner's own speech. It does not capture,
-transcribe, store, or analyze a second person's voice, even transiently, even without
-saving it to disk. This is not a technical limitation — it is a deliberate scope line, for
-two reasons:
+RFC-009 was originally designed to only ever process the enrolled owner's own speech,
+enforced unconditionally by speaker verification before transcription. After extensive
+real-hardware testing (see `changelog.md`'s "RFC-009 verification threshold, second
+recalibration" and the entries above it) showed the enrolled owner's *own* genuine
+similarity score swinging widely (0.23–0.68) even after every mechanical cause was found
+and fixed, the owner explicitly asked for plain voice control without speaker
+recognition: JARVIS should hear and act on any voice, not gate every utterance behind a
+verification step that was rejecting the owner's own genuine speech as often as it
+accepted it.
+
+This is now controlled by `voice_require_speaker_verification` (default `false`): with it
+off, `voice talk`/`/voice/turn` transcribe and route any voice exactly like typed input,
+and no enrollment is required at all. Setting it back to `true` (`config set
+voice_require_speaker_verification true`) restores the original behavior below in full —
+the enrollment/verification code was not removed, only made optional. Whoever runs this
+with the default off should understand what changes: the two reasons below, which
+justified making this unconditional, still apply whenever more than one person's voice
+might reach the microphone.
 
 1. **Consent.** Processing another identifiable person's speech (their voice is personal
    data) without their knowledge has real legal exposure that varies by jurisdiction —
@@ -75,8 +89,9 @@ mic/speaker client, reusing the same Tailscale network as RFC-010's location tra
 - local speech-to-text of the owner's utterance for one voice turn (one question/command,
   the same size as one typed message)
 - local text-to-speech for JARVIS's spoken reply
-- local owner speaker verification: the enrolled owner's voice is required before an
-  utterance is treated as input at all
+- local owner speaker verification, now opt-in via `voice_require_speaker_verification`
+  (default `false`, see "Hard boundary" above): when enabled, the enrolled owner's voice
+  is required before an utterance is treated as input at all
 - free-form "help me think through this" requests, handled exactly like a typed request —
   including disagreement/compromise/decision-support questions where the owner narrates
   the situation
@@ -95,8 +110,13 @@ mic/speaker client, reusing the same Tailscale network as RFC-010's location tra
 
 ## Not supported in RFC-009
 
-- capturing, transcribing, or analyzing any voice other than the enrolled owner's
-- treating a second/unverified voice as a command or as input of any kind
+- capturing, transcribing, or analyzing any voice other than the enrolled owner's --
+  **only while `voice_require_speaker_verification` is enabled**; with it at its default
+  `false`, any voice reaching the microphone is transcribed and treated as input, which is
+  the owner's explicit, deliberate choice for a single-user local device (see "Hard
+  boundary" above)
+- treating a second/unverified voice as a command or as input of any kind -- same
+  qualification as above
 - continuous ambient transcription without a wake-word match or an explicit push-to-talk
   session
 - recording or persisting raw audio; only the text of what was actually transcribed and
@@ -121,9 +141,10 @@ mic/speaker client, reusing the same Tailscale network as RFC-010's location tra
   audio is actively being captured for a voice turn — never a state where JARVIS is
   listening to content without something on-screen saying so.
 
-## Owner verification
+## Owner verification (when `voice_require_speaker_verification` is enabled)
 
-1. `voice status` reports enabled/disabled, mic-active state, and enrollment state cleanly.
+1. `voice status` reports enabled/disabled, mic-active state, speaker-verification
+   requirement, and enrollment state cleanly.
 2. Speaking a request in a voice not matching the enrolled owner produces no action and no
    transcript is kept of it.
 3. A described (not overheard) disagreement — "my friend and I disagree about X, he says A,

@@ -95,6 +95,17 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertEqual(config["voice_input_sample_rate"], 48000)
         self.assertEqual(config["voice_input_channels"], 2)
 
+    def test_voice_require_speaker_verification_defaults_off_and_is_configurable(self) -> None:
+        # Owner's explicit request: plain voice control, no speaker recognition. Speaker
+        # verification is opt-in now (default False), not opt-out, but stays available for
+        # anyone who wants RFC-009's original hard-boundary behavior back.
+        self.assertEqual(get_effective_runtime_config()["voice_require_speaker_verification"], False)
+        self.assertEqual(route_command("config set voice_require_speaker_verification true"), "Configuration updated: voice_require_speaker_verification.")
+        self.assertEqual(load_config()["voice_require_speaker_verification"], True)
+        reset_runtime_config()
+        self.assertEqual(get_effective_runtime_config()["voice_require_speaker_verification"], True)
+        self.assertEqual(route_command("config set voice_require_speaker_verification not-a-bool"), "Configuration change rejected.")
+
     def test_voice_verification_threshold_default_is_data_driven_recalibration(self) -> None:
         # Regression test for the recalibration itself. First pass: the original 0.75
         # default rejected a real enrolled owner's own genuine voice (live similarity

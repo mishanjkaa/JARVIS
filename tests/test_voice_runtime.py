@@ -174,11 +174,13 @@ class VoiceRuntimeTests(unittest.TestCase):
 
     # --- speaker verification gate -------------------------------------------
 
-    def test_voice_turn_before_enrollment_raises(self) -> None:
+    def test_voice_turn_before_enrollment_raises_when_verification_required(self) -> None:
+        set_runtime_config_value("voice_require_speaker_verification", True)
         with self.assertRaises(VoiceNotEnrolledError):
             get_voice_controller().handle_voice_turn([0.0] * 1600, route_text=lambda text: "reply")
 
-    def test_voice_turn_rejects_non_owner_voice_and_produces_no_transcript(self) -> None:
+    def test_voice_turn_rejects_non_owner_voice_and_produces_no_transcript_when_verification_required(self) -> None:
+        set_runtime_config_value("voice_require_speaker_verification", True)
         self._enroll_owner()
         self.fake_verification._embedding_for = _stranger_embedding
         route_calls = []
@@ -187,7 +189,8 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertEqual(route_calls, [])
         self.assertEqual(self.fake_stt.calls, 0)
 
-    def test_voice_turn_accepts_owner_voice(self) -> None:
+    def test_voice_turn_accepts_owner_voice_when_verification_required(self) -> None:
+        set_runtime_config_value("voice_require_speaker_verification", True)
         self._enroll_owner()
         route_calls = []
         result = get_voice_controller().handle_voice_turn([0.0] * 1600, route_text=lambda text: route_calls.append(text) or "Remembered.")
@@ -195,6 +198,35 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertEqual(route_calls, [self.fake_stt.transcript])
         self.assertEqual(result.reply_text, "Remembered.")
         self.assertEqual(result.reply_audio_wav, self.fake_tts.wav_bytes)
+
+    # --- speaker verification is opt-in (owner's explicit request) ------------
+    #
+    # RFC-009 originally ran speaker verification unconditionally, as a hard boundary (see
+    # docs/RFC-009_ON_DEMAND_VOICE_ASSISTANT.md). After extensive real-hardware testing
+    # showed the enrolled owner's own genuine similarity score varying widely (0.23-0.68)
+    # even with every mechanical cause (mic capture, stale enrollment, silence padding)
+    # fixed, the owner explicitly asked for plain voice control without speaker
+    # recognition. `voice_require_speaker_verification` defaults to False: any voice is
+    # now transcribed and routed like typed input, and no enrollment is required at all.
+    # The feature itself is not removed -- `config set voice_require_speaker_verification
+    # true` restores the original hard-boundary behavior above.
+
+    def test_voice_turn_skips_speaker_verification_by_default(self) -> None:
+        self.fake_verification._embedding_for = _stranger_embedding  # would reject if checked
+        route_calls = []
+        result = get_voice_controller().handle_voice_turn([0.0] * 1600, route_text=lambda text: route_calls.append(text) or "ok")
+        self.assertEqual(route_calls, [self.fake_stt.transcript])
+        self.assertEqual(result.reply_text, "ok")
+
+    def test_voice_turn_works_without_any_enrollment_by_default(self) -> None:
+        self.assertFalse(enrollment.is_enrolled())
+        result = get_voice_controller().handle_voice_turn([0.0] * 1600, route_text=lambda text: "ok")
+        self.assertEqual(result.reply_text, "ok")
+
+    def test_voice_status_reports_speaker_verification_requirement(self) -> None:
+        self.assertIn("Speaker verification required: no", get_voice_controller().status_message())
+        set_runtime_config_value("voice_require_speaker_verification", True)
+        self.assertIn("Speaker verification required: yes", get_voice_controller().status_message())
 
     def test_voice_turn_when_disabled_raises(self) -> None:
         self._enroll_owner()
@@ -213,6 +245,7 @@ class VoiceRuntimeTests(unittest.TestCase):
         # investigation: every verification attempt must log the live/enrolled embedding
         # lengths, the enrolled sample count, the computed similarity, the configured
         # threshold, and the accept/reject outcome -- not just silently accept or raise.
+        set_runtime_config_value("voice_require_speaker_verification", True)
         self._enroll_owner()
         with self.assertLogs("app.brain.voice.controller", level="INFO") as logs:
             get_voice_controller().handle_voice_turn([0.0] * 1600, route_text=lambda text: "reply")
@@ -222,6 +255,7 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertIn("result=accept", joined)
 
     def test_voice_verification_logs_reject_outcome_with_score(self) -> None:
+        set_runtime_config_value("voice_require_speaker_verification", True)
         self._enroll_owner()
         self.fake_verification._embedding_for = _stranger_embedding
         with self.assertLogs("app.brain.voice.controller", level="INFO") as logs:
@@ -239,6 +273,7 @@ class VoiceRuntimeTests(unittest.TestCase):
         # (0.6) must accept it.
         import math
 
+        set_runtime_config_value("voice_require_speaker_verification", True)
         self._enroll_owner()  # profile embedding is [1.0, 0.0, 0.0] -- see _owner_embedding
         target_similarity = 0.7311
         orthogonal_component = math.sqrt(1.0 - target_similarity**2)
@@ -255,6 +290,7 @@ class VoiceRuntimeTests(unittest.TestCase):
         # A dimension mismatch makes cosine_similarity() silently return 0.0 with no other
         # symptom; this must be surfaced explicitly rather than presented as an ordinary
         # low-similarity rejection.
+        set_runtime_config_value("voice_require_speaker_verification", True)
         self._enroll_owner()
         self.fake_verification._embedding_for = lambda _audio: [1.0, 0.0]  # enrolled profile has length 3
         with self.assertLogs("app.brain.voice.controller", level="ERROR") as logs:
@@ -296,6 +332,7 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertEqual(base64.b64decode(payload["reply_audio_wav_base64"]), self.fake_tts.wav_bytes)
 
     def test_voice_turn_request_reports_no_action_for_unverified_voice(self) -> None:
+        set_runtime_config_value("voice_require_speaker_verification", True)
         self._enroll_owner()
         self.fake_verification._embedding_for = _stranger_embedding
         status, body = handle_voice_turn_request(headers={"Authorization": "Bearer test-secret"}, raw_body=_wav_bytes())
