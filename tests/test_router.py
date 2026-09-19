@@ -231,6 +231,15 @@ class RouterTests(unittest.TestCase):
         open_mock.assert_called_once_with("https://job.pt")
 
     @patch("app.brain.internet.web_actions.webbrowser.open")
+    def test_open_site_russian_voice_phrasing_with_filler_words_and_cyrillic_name(self, open_mock) -> None:
+        # A second, also real, owner-reported failure: this exact utterance (a filler word
+        # between the verb and "сайт", and the site named in Cyrillic rather than its
+        # Latin-alphabet spelling) missed the original exact-phrase matching entirely.
+        open_mock.return_value = True
+        self.assertEqual(route_command("Открой, пожалуйста, сайт Википедия"), "Opened википедия.")
+        open_mock.assert_called_once_with("https://www.wikipedia.org")
+
+    @patch("app.brain.internet.web_actions.webbrowser.open")
     def test_search_query_is_encoded(self, open_mock) -> None:
         open_mock.return_value = True
         self.assertEqual(route_command("search OpenAI GPT-5"), "Opened search results for: OpenAI GPT-5")

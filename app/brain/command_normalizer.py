@@ -1,5 +1,42 @@
 import re
 
+# Real spoken Russian for "open X" varies a lot more than the exact alias_map entries
+# below can cover -- "открой сайт википедия", "открой, пожалуйста, сайт википедия", "зайди
+# на сайт википедия" and "можешь открыть сайт википедия?" all mean the same thing, but
+# only the first matches a fixed phrase. Found the hard way: a real request phrased with
+# an extra filler word ("пожалуйста") or a different verb ("зайди" -- "go to" rather than
+# "open") missed the exact alias_map entries/prefix check entirely and fell through to the
+# AI/agent runtime, which is exactly the unreliable path this whole Russian-alias effort
+# exists to avoid. This keyword-based fallback triggers on ANY recognized "open"-type verb
+# appearing anywhere in the phrase, then looks for a target keyword ("сайт", "браузер",
+# etc.) anywhere after it -- order-and-filler-tolerant instead of requiring an exact phrase.
+_RU_OPEN_VERBS = {"открой", "открыть", "открывай", "открывать", "зайди", "зайти", "заходи", "запусти", "запустить", "перейди", "перейти", "включи"}
+_RU_SIMPLE_TARGETS = {
+    "браузер": "open browser",
+    "браузере": "open browser",
+    "блокнот": "open notepad",
+    "калькулятор": "open calculator",
+    "ютуб": "open youtube",
+    "youtube": "open youtube",
+    "гитхаб": "open github",
+    "github": "open github",
+    "гугл": "open google",
+    "google": "open google",
+}
+
+
+def _ru_open_intent_command(lowered: str, lowered_words: list[str], original_words: list[str]) -> str | None:
+    if not any(word.strip(",.!?") in _RU_OPEN_VERBS for word in lowered_words):
+        return None
+    for index, word in enumerate(lowered_words):
+        cleaned_word = word.strip(",.!?")
+        if cleaned_word in _RU_SIMPLE_TARGETS:
+            return _RU_SIMPLE_TARGETS[cleaned_word]
+        if cleaned_word == "сайт":
+            target = " ".join(original_words[index + 1:]).strip().rstrip(".,!?")
+            return f"open site {target.lower()}" if target else "open site"
+    return None
+
 
 def normalize_command(command: str) -> str:
     if not command:
@@ -106,6 +143,11 @@ def normalize_command(command: str) -> str:
     if lowered.startswith("открой сайт "):
         site = normalized[len("открой сайт "):].strip()
         return f"open site {site.lower()}" if site else "open site"
+
+    lowered_words = lowered.split(" ")
+    ru_intent_command = _ru_open_intent_command(lowered, lowered_words, words)
+    if ru_intent_command is not None:
+        return ru_intent_command
 
     if lowered.startswith("remember that "):
         rest = normalized[len("remember that "):]

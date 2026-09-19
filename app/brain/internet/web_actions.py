@@ -16,6 +16,18 @@ _KNOWN_SITE_ALIASES = {
     "yandex": "https://yandex.com",
     "vk": "https://vk.com",
     "wikipedia": "https://www.wikipedia.org",
+    # Cyrillic spellings of the same sites -- a real voice request ("открой сайт
+    # википедия") names the site in Russian, not in its Latin-alphabet form, so the
+    # English key alone was never going to match it.
+    "гугл": "https://www.google.com",
+    "гмайл": "https://mail.google.com",
+    "почта": "https://mail.google.com",
+    "ютуб": "https://www.youtube.com",
+    "гитхаб": "https://github.com",
+    "яндекс": "https://yandex.com",
+    "вконтакте": "https://vk.com",
+    "вк": "https://vk.com",
+    "википедия": "https://www.wikipedia.org",
 }
 
 

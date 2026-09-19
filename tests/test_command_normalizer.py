@@ -55,3 +55,14 @@ class CommandNormalizerTests(unittest.TestCase):
         # give a clear "please specify which site" answer instead of an "unrecognized
         # command" one.
         self.assertEqual(normalize_command("открой сайт"), "open site")
+
+    def test_russian_open_intent_tolerates_filler_words_and_other_verbs(self) -> None:
+        # Real owner-reported failure: "открой сайт википедия" spoken with natural filler
+        # ("пожалуйста") or a different verb ("зайди" -- go to, rather than "открой" --
+        # open) missed the exact alias_map entries/prefix check and fell through to the AI
+        # runtime instead of opening anything. This is order-and-filler tolerant instead.
+        self.assertEqual(normalize_command("Открой, пожалуйста, сайт Википедия"), "open site википедия")
+        self.assertEqual(normalize_command("зайди на сайт вконтакте"), "open site вконтакте")
+        self.assertEqual(normalize_command("можешь открыть браузер"), "open browser")
+        self.assertEqual(normalize_command("пожалуйста открой ютуб"), "open youtube")
+        self.assertEqual(normalize_command("запусти калькулятор"), "open calculator")
