@@ -98,6 +98,8 @@ def load_config(path: Path | str | None = None) -> dict[str, Any]:
     }
     float_ranges = {
         "voice_verification_threshold": (0.0, 1.0),
+        "voice_talk_silence_timeout_seconds": (0.2, 10.0),
+        "voice_talk_min_duration_seconds": (0.2, 10.0),
     }
     for key, (minimum, maximum) in float_ranges.items():
         value = merged.get(key)

@@ -126,6 +126,29 @@ class RuntimeConfigTests(unittest.TestCase):
         reset_runtime_config()
         self.assertEqual(get_effective_runtime_config()["voice_verification_threshold"], 0.5)
 
+    def test_voice_talk_auto_stop_settings_default_and_are_configurable(self) -> None:
+        # RFC-009 latency fix: `voice talk` used to always record for the full fixed
+        # duration even after the owner stopped speaking (owner-reported ~7s wait). These
+        # three keys make the chunked, silence-triggered early stop in
+        # app.brain.voice.audio_io._capture_native_audio configurable, defaulting to on.
+        self.assertEqual(get_effective_runtime_config()["voice_talk_auto_stop_on_silence"], True)
+        self.assertEqual(get_effective_runtime_config()["voice_talk_silence_timeout_seconds"], 1.0)
+        self.assertEqual(get_effective_runtime_config()["voice_talk_min_duration_seconds"], 1.0)
+        self.assertEqual(route_command("config set voice_talk_auto_stop_on_silence false"), "Configuration updated: voice_talk_auto_stop_on_silence.")
+        self.assertEqual(route_command("config set voice_talk_silence_timeout_seconds 2.5"), "Configuration updated: voice_talk_silence_timeout_seconds.")
+        self.assertEqual(route_command("config set voice_talk_min_duration_seconds 0.5"), "Configuration updated: voice_talk_min_duration_seconds.")
+        self.assertEqual(load_config()["voice_talk_auto_stop_on_silence"], False)
+        self.assertEqual(load_config()["voice_talk_silence_timeout_seconds"], 2.5)
+        self.assertEqual(load_config()["voice_talk_min_duration_seconds"], 0.5)
+        reset_runtime_config()
+        config = get_effective_runtime_config()
+        self.assertEqual(config["voice_talk_auto_stop_on_silence"], False)
+        self.assertEqual(config["voice_talk_silence_timeout_seconds"], 2.5)
+        self.assertEqual(config["voice_talk_min_duration_seconds"], 0.5)
+        self.assertEqual(route_command("config set voice_talk_auto_stop_on_silence not-a-bool"), "Configuration change rejected.")
+        self.assertEqual(route_command("config set voice_talk_silence_timeout_seconds 99"), "Configuration change rejected.")
+        self.assertEqual(route_command("config set voice_talk_min_duration_seconds -1"), "Configuration change rejected.")
+
     def test_config_set_parses_float_values_not_just_bool_and_int(self) -> None:
         # Found while making voice_verification_threshold's new default retunable from the
         # CLI: `config set` never parsed a float at all (only "true"/"false" and a

@@ -38,13 +38,14 @@ MUTABLE_KEYS = {
     "location_enabled", "location_bind_host", "location_port", "location_stale_after_seconds", "osrm_base_url",
     "voice_stt_model", "voice_tts_voice", "voice_require_speaker_verification", "voice_verification_threshold",
     "voice_input_device", "voice_input_sample_rate", "voice_input_channels",
+    "voice_talk_auto_stop_on_silence", "voice_talk_silence_timeout_seconds", "voice_talk_min_duration_seconds",
 }
 
 
 def validate_change(key: str, value: object) -> object:
     if key not in MUTABLE_KEYS:
         raise ValueError("configuration key is not allowlisted")
-    if key in {"voice_enabled", "voice_require_speaker_verification", "ai_enabled", "ai_allow_conversation", "show_plan_preview", "agent_enabled", "agent_allow_persistent_actions", "filesystem_enabled", "filesystem_soft_delete", "developer_mode", "auto_execute_low_risk", "auto_execute_medium_project", "terminal_enabled", "terminal_allow_python", "terminal_allow_git_read_only", "terminal_allow_package_install_with_approval", "browser_enabled", "browser_headless_default", "browser_allow_http", "browser_screenshot_overwrite", "vision_enabled", "vision_browser_capture_enabled", "intelligence_enabled", "intelligence_require_structured_output", "intelligence_allow_goal_evaluation", "intelligence_allow_heuristic_fallback", "intelligence_fail_closed", "memory_learned_capture_enabled", "vision_desktop_capture_enabled", "location_enabled"} and not isinstance(value, bool):
+    if key in {"voice_enabled", "voice_require_speaker_verification", "voice_talk_auto_stop_on_silence", "ai_enabled", "ai_allow_conversation", "show_plan_preview", "agent_enabled", "agent_allow_persistent_actions", "filesystem_enabled", "filesystem_soft_delete", "developer_mode", "auto_execute_low_risk", "auto_execute_medium_project", "terminal_enabled", "terminal_allow_python", "terminal_allow_git_read_only", "terminal_allow_package_install_with_approval", "browser_enabled", "browser_headless_default", "browser_allow_http", "browser_screenshot_overwrite", "vision_enabled", "vision_browser_capture_enabled", "intelligence_enabled", "intelligence_require_structured_output", "intelligence_allow_goal_evaluation", "intelligence_allow_heuristic_fallback", "intelligence_fail_closed", "memory_learned_capture_enabled", "vision_desktop_capture_enabled", "location_enabled"} and not isinstance(value, bool):
         raise ValueError("configuration value has invalid type")
     if key in {"ai_timeout_seconds", "ai_max_plan_steps", "agent_max_steps", "agent_result_size_limit", "filesystem_max_file_size", "filesystem_max_read_size", "filesystem_max_write_size", "terminal_timeout_seconds", "terminal_max_stdout_chars", "terminal_max_stderr_chars", "terminal_history_limit", "browser_navigation_timeout_seconds", "browser_extract_text_max_chars", "browser_max_elements", "vision_timeout_seconds", "vision_max_file_size", "vision_max_width", "vision_max_height", "vision_max_pixels", "vision_max_ocr_chars", "vision_max_regions", "vision_evidence_retention_seconds", "vision_browser_capture_ttl_seconds", "vision_browser_capture_max_bytes", "vision_browser_capture_max_width", "vision_browser_capture_max_height", "vision_browser_capture_max_pixels", "vision_browser_capture_min_candidate_width_pixels", "vision_browser_capture_min_candidate_height_pixels", "vision_browser_capture_min_candidate_area_pixels", "vision_browser_capture_verification_context_scale_percent", "vision_browser_capture_verification_context_min_width_pixels", "vision_browser_capture_verification_context_min_height_pixels", "vision_browser_capture_verification_context_max_area_percent", "intelligence_timeout_seconds", "intelligence_max_plan_steps", "intelligence_max_context_chars", "intelligence_max_recent_messages", "intelligence_max_planning_attempts", "memory_max_entries", "vision_desktop_capture_ttl_seconds", "vision_desktop_capture_max_bytes", "vision_desktop_capture_max_width", "vision_desktop_capture_max_height", "vision_desktop_capture_max_pixels", "location_port", "location_stale_after_seconds"} and (not isinstance(value, int) or isinstance(value, bool) or value <= 0):
         raise ValueError("configuration value has invalid range")
@@ -61,6 +62,8 @@ def validate_change(key: str, value: object) -> object:
     if key == "voice_input_sample_rate" and (not isinstance(value, int) or isinstance(value, bool) or not 8000 <= value <= 192000):
         raise ValueError("configuration value has invalid range")
     if key == "voice_input_channels" and (not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 8):
+        raise ValueError("configuration value has invalid range")
+    if key in {"voice_talk_silence_timeout_seconds", "voice_talk_min_duration_seconds"} and (not isinstance(value, (int, float)) or isinstance(value, bool) or not 0.2 <= float(value) <= 10.0):
         raise ValueError("configuration value has invalid range")
     return value
 _ALLOWED_KEYS = {
@@ -159,6 +162,9 @@ _ALLOWED_KEYS = {
     "voice_input_device",
     "voice_input_sample_rate",
     "voice_input_channels",
+    "voice_talk_auto_stop_on_silence",
+    "voice_talk_silence_timeout_seconds",
+    "voice_talk_min_duration_seconds",
 }
 
 
@@ -263,6 +269,9 @@ def get_runtime_config() -> dict[str, Any]:
         "voice_input_device": 1,
         "voice_input_sample_rate": 44100,
         "voice_input_channels": 4,
+        "voice_talk_auto_stop_on_silence": True,
+        "voice_talk_silence_timeout_seconds": 1.0,
+        "voice_talk_min_duration_seconds": 1.0,
     }
 
 
@@ -303,7 +312,9 @@ def set_runtime_config_value(key: str, value: Any) -> dict[str, Any]:
         raise ValueError("invalid value")
     if key == "voice_input_channels" and (not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 8):
         raise ValueError("invalid value")
-    if key in {"voice_enabled", "voice_require_speaker_verification", "ai_enabled", "ai_allow_conversation", "show_plan_preview", "agent_enabled", "agent_allow_persistent_actions", "filesystem_enabled", "filesystem_soft_delete", "developer_mode", "auto_execute_low_risk", "auto_execute_medium_project", "terminal_enabled", "terminal_allow_python", "terminal_allow_git_read_only", "terminal_allow_package_install_with_approval", "browser_enabled", "browser_headless_default", "browser_allow_http", "browser_screenshot_overwrite", "vision_enabled", "vision_browser_capture_enabled", "intelligence_enabled", "intelligence_require_structured_output", "intelligence_allow_goal_evaluation", "intelligence_allow_heuristic_fallback", "intelligence_fail_closed", "memory_learned_capture_enabled", "vision_desktop_capture_enabled", "location_enabled"} and not isinstance(value, bool):
+    if key in {"voice_talk_silence_timeout_seconds", "voice_talk_min_duration_seconds"} and (not isinstance(value, (int, float)) or isinstance(value, bool) or not 0.2 <= float(value) <= 10.0):
+        raise ValueError("invalid value")
+    if key in {"voice_enabled", "voice_require_speaker_verification", "voice_talk_auto_stop_on_silence", "ai_enabled", "ai_allow_conversation", "show_plan_preview", "agent_enabled", "agent_allow_persistent_actions", "filesystem_enabled", "filesystem_soft_delete", "developer_mode", "auto_execute_low_risk", "auto_execute_medium_project", "terminal_enabled", "terminal_allow_python", "terminal_allow_git_read_only", "terminal_allow_package_install_with_approval", "browser_enabled", "browser_headless_default", "browser_allow_http", "browser_screenshot_overwrite", "vision_enabled", "vision_browser_capture_enabled", "intelligence_enabled", "intelligence_require_structured_output", "intelligence_allow_goal_evaluation", "intelligence_allow_heuristic_fallback", "intelligence_fail_closed", "memory_learned_capture_enabled", "vision_desktop_capture_enabled", "location_enabled"} and not isinstance(value, bool):
         raise ValueError("invalid value")
     if key in {"ai_timeout_seconds", "ai_max_plan_steps", "agent_max_steps", "agent_result_size_limit", "filesystem_max_file_size", "filesystem_max_read_size", "filesystem_max_write_size", "terminal_timeout_seconds", "terminal_max_stdout_chars", "terminal_max_stderr_chars", "terminal_history_limit", "browser_navigation_timeout_seconds", "browser_extract_text_max_chars", "browser_max_elements", "vision_timeout_seconds", "vision_max_file_size", "vision_max_width", "vision_max_height", "vision_max_pixels", "vision_max_ocr_chars", "vision_max_regions", "vision_evidence_retention_seconds", "vision_browser_capture_ttl_seconds", "vision_browser_capture_max_bytes", "vision_browser_capture_max_width", "vision_browser_capture_max_height", "vision_browser_capture_max_pixels", "vision_browser_capture_min_candidate_width_pixels", "vision_browser_capture_min_candidate_height_pixels", "vision_browser_capture_min_candidate_area_pixels", "vision_browser_capture_verification_context_scale_percent", "vision_browser_capture_verification_context_min_width_pixels", "vision_browser_capture_verification_context_min_height_pixels", "vision_browser_capture_verification_context_max_area_percent", "intelligence_timeout_seconds", "intelligence_max_plan_steps", "intelligence_max_context_chars", "intelligence_max_recent_messages", "intelligence_max_planning_attempts", "memory_max_entries", "vision_desktop_capture_ttl_seconds", "vision_desktop_capture_max_bytes", "vision_desktop_capture_max_width", "vision_desktop_capture_max_height", "vision_desktop_capture_max_pixels", "location_port", "location_stale_after_seconds"} and (not isinstance(value, int) or isinstance(value, bool) or value <= 0):
         raise ValueError("invalid value")

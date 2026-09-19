@@ -380,12 +380,16 @@ class VoiceRuntimeTests(unittest.TestCase):
 
         with patch.object(sd, "rec", side_effect=fake_rec), patch.object(sd, "wait", return_value=None):
             audio_io.record_from_microphone(1.0)
-        self.assertEqual(len(seen_calls), 1)
-        call = seen_calls[0]
-        self.assertEqual(call["device"], 1)
-        self.assertEqual(call["samplerate"], 44100)
-        self.assertEqual(call["channels"], 4)
-        self.assertEqual(call["frame_count"], 44100)
+        # Silence throughout (all-zero chunks) never triggers the auto-stop-on-silence early
+        # exit, so capture runs the full 1.0s window -- but in `_CAPTURE_CHUNK_SECONDS` (0.2s)
+        # chunks via repeated `sd.rec()` calls now, not one big blocking call.
+        self.assertEqual(len(seen_calls), 5)
+        for call in seen_calls:
+            self.assertEqual(call["device"], 1)
+            self.assertEqual(call["samplerate"], 44100)
+            self.assertEqual(call["channels"], 4)
+            self.assertEqual(call["frame_count"], 8820)
+        self.assertEqual(sum(call["frame_count"] for call in seen_calls), 44100)
 
     def test_record_from_microphone_downmixes_and_resamples_to_target_rate(self) -> None:
         import numpy as np
@@ -410,6 +414,81 @@ class VoiceRuntimeTests(unittest.TestCase):
         self.assertAlmostEqual(len(samples), VOICE_SAMPLE_RATE_HZ, delta=200)
         interior = samples[50:-50]
         self.assertTrue(all(abs(value - 0.25) < 0.05 for value in interior))
+
+    # --- RFC-009 latency fix: chunked capture with silence-triggered early stop -----
+
+    def test_capture_native_audio_stops_early_after_trailing_silence(self) -> None:
+        import numpy as np
+
+        from app.brain.voice import audio_io
+
+        class _FakeSD:
+            def __init__(self, amplitudes: list[float]) -> None:
+                self._amplitudes = amplitudes
+                self.calls: list[int] = []
+
+            def rec(self, frame_count, samplerate, channels, dtype, device=None):
+                amplitude = self._amplitudes[len(self.calls)]
+                self.calls.append(frame_count)
+                return np.full((frame_count, channels), amplitude, dtype=dtype)
+
+            def wait(self) -> None:
+                return None
+
+        # Chunk 1 calibrates the noise floor (quiet). Chunk 2 is loud speech. Chunks 3-7
+        # are quiet again -- 5 * 0.2s = 1.0s of trailing silence, enough to trigger the
+        # early stop once `min_duration_seconds` has also elapsed. A speech-detecting
+        # `_FakeSD` with fewer entries than the real implementation calls `rec()` would
+        # raise IndexError, so this also proves it never over-runs past the expected stop.
+        fake_sd = _FakeSD([0.0001, 0.5, 0.0001, 0.0001, 0.0001, 0.0001, 0.0001])
+
+        recording = audio_io._capture_native_audio(
+            fake_sd,
+            device=1,
+            native_sample_rate=44100,
+            channels=1,
+            max_duration_seconds=5.0,
+            auto_stop_enabled=True,
+            silence_timeout_seconds=1.0,
+            min_duration_seconds=1.0,
+        )
+        self.assertEqual(len(fake_sd.calls), 7)
+        # 7 chunks of 0.2s (8820 frames at 44100 Hz) = 1.4s total, well short of the 5.0s
+        # ceiling -- proving capture stopped once trailing silence was detected instead of
+        # always running to `max_duration_seconds`.
+        self.assertEqual(len(recording), 7 * 8820)
+
+    def test_capture_native_audio_runs_full_duration_when_auto_stop_disabled(self) -> None:
+        import numpy as np
+
+        from app.brain.voice import audio_io
+
+        class _FakeSD:
+            def __init__(self) -> None:
+                self.calls: list[int] = []
+
+            def rec(self, frame_count, samplerate, channels, dtype, device=None):
+                self.calls.append(frame_count)
+                return np.zeros((frame_count, channels), dtype=dtype)
+
+            def wait(self) -> None:
+                return None
+
+        fake_sd = _FakeSD()
+        recording = audio_io._capture_native_audio(
+            fake_sd,
+            device=1,
+            native_sample_rate=44100,
+            channels=1,
+            max_duration_seconds=0.6,
+            auto_stop_enabled=False,
+            silence_timeout_seconds=1.0,
+            min_duration_seconds=1.0,
+        )
+        # With auto-stop disabled, silence (even for the whole recording) never ends
+        # capture early -- it always runs the full requested window: 0.6s / 0.2s chunks.
+        self.assertEqual(len(fake_sd.calls), 3)
+        self.assertEqual(len(recording), 3 * 8820)
 
     def test_record_from_microphone_reports_device_on_failure(self) -> None:
         import sounddevice as sd
@@ -655,13 +734,21 @@ class VoiceSilenceTrimFixTests(unittest.TestCase):
 
         from app.brain.voice import audio_io
 
+        native_sample_rate = 44100
+        position = {"frames": 0}
+
         def fake_rec(frame_count, samplerate, channels, dtype, device=None):
-            # 6s native capture: 2s silence, 2s of signal, 2s silence -- matching the shape
-            # of the real field recordings that exposed this bug (mostly silence, a real
-            # utterance somewhere in the middle, differing start/end silence each attempt).
-            segment = frame_count // 3
+            # Native capture now happens in small chunks (the RFC-009 latency fix), so this
+            # simulates the intended overall 6s envelope -- 2s silence, 2s of signal, 2s
+            # silence, matching the shape of the real field recordings that exposed this bug
+            # -- across however many chunk-sized `rec()` calls it takes to reach it, rather
+            # than assuming (as before the latency fix) a single call spanning the full 6s.
+            start = position["frames"]
+            end = start + frame_count
+            position["frames"] = end
             recording = np.zeros((frame_count, channels), dtype=dtype)
-            recording[segment : 2 * segment, :] = 0.3
+            t = (np.arange(start, end, dtype=np.float64) / native_sample_rate)
+            recording[(t >= 2.0) & (t < 4.0), :] = 0.3
             return recording
 
         with patch.object(sd, "rec", side_effect=fake_rec), patch.object(sd, "wait", return_value=None):
@@ -671,7 +758,10 @@ class VoiceSilenceTrimFixTests(unittest.TestCase):
         full_length = int(6.0 * VOICE_SAMPLE_RATE_HZ)
         # The trimmed recording must be meaningfully shorter than the untrimmed 6s window --
         # this is the actual fix, not just a diagnostic -- while still comfortably covering
-        # the ~2s of real signal plus padding.
+        # the ~2s of real signal plus padding. (On top of this, the latency-fix auto-stop
+        # already cuts the capture short once trailing silence follows the detected speech --
+        # this test only cares that whatever comes out the other end is still correctly
+        # trimmed down to the speech-bearing region.)
         self.assertLess(len(samples), full_length // 2)
         self.assertGreater(len(samples), int(1.5 * VOICE_SAMPLE_RATE_HZ))
         joined = "\n".join(logs.output)

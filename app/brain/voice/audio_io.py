@@ -36,6 +36,27 @@ DEFAULT_INPUT_DEVICE = 1
 DEFAULT_INPUT_SAMPLE_RATE = 44100
 DEFAULT_INPUT_CHANNELS = 4
 
+# RFC-009 latency fix (owner-reported: "I finish speaking, then wait ~7s for the action").
+# `record_from_microphone` used to always record for the full requested duration (a fixed
+# 6s for `voice talk`) via one blocking `sounddevice.rec()` call, regardless of how much of
+# that window actually contained speech -- so most of the reported wait was simply the mic
+# continuing to record silence after the owner had already finished talking. Recording is
+# now done in small chunks instead of one big blocking call, so it can stop as soon as
+# enough trailing silence follows detected speech, instead of always running to
+# `duration_seconds`. `duration_seconds` becomes an upper bound (a safety cap for
+# background noise/heavy breathing never reading as real silence), not a fixed length.
+_CAPTURE_CHUNK_SECONDS = 0.2
+# A chunk counts as "speech" only once its RMS clears the recording's own calibrated noise
+# floor (the very first chunk, before anything else) by this multiple, or this absolute
+# floor if the room is unusually quiet (guards against a near-zero noise floor making any
+# tiny fluctuation count as speech) -- an adaptive, per-recording threshold rather than one
+# fixed constant, since a fixed constant can't account for a different mic/room's baseline
+# noise level.
+_ACTIVE_RMS_MULTIPLIER = 2.5
+_ACTIVE_RMS_ABSOLUTE_FLOOR = 0.003
+DEFAULT_SILENCE_TIMEOUT_SECONDS = 1.0
+DEFAULT_MIN_RECORDING_SECONDS = 1.0
+
 
 def _input_device_settings() -> tuple[int, int, int]:
     config = get_effective_runtime_config()
@@ -304,6 +325,99 @@ def _describe_sounddevice_import_failure(error: Exception, *, action: str = "Loc
     )
 
 
+def _capture_native_audio(
+    sd,
+    *,
+    device: int,
+    native_sample_rate: int,
+    channels: int,
+    max_duration_seconds: float,
+    auto_stop_enabled: bool,
+    silence_timeout_seconds: float,
+    min_duration_seconds: float,
+):
+    """Captures native-format audio in `_CAPTURE_CHUNK_SECONDS` chunks via repeated
+    `sd.rec()` calls (rather than one blocking call for the full duration), stopping as
+    soon as `silence_timeout_seconds` of trailing silence follows detected speech, once at
+    least `min_duration_seconds` has elapsed -- so a push-to-talk recording ends shortly
+    after the owner stops talking instead of always running to `max_duration_seconds`.
+    Falls back to running the full `max_duration_seconds` when `auto_stop_enabled` is
+    False, when nothing is ever detected as speech (silence throughout, e.g. a completely
+    quiet room or test double), or as long as the calibrated noise floor keeps every chunk
+    below the active threshold."""
+    import numpy as np
+
+    chunk_frames = max(1, int(native_sample_rate * _CAPTURE_CHUNK_SECONDS))
+    # Total frames (not seconds) drives the loop bound: accumulating `chunk_seconds` as a
+    # running float and comparing it against `max_duration_seconds` each iteration lets
+    # floating-point drift (e.g. 0.19999999999999996 truncating to one frame short) leave a
+    # stray few-microsecond final chunk instead of cleanly finishing on the second-to-last
+    # one -- harmless in practice but needless, so frame counts are tracked as integers.
+    total_frames = max(1, round(max_duration_seconds * native_sample_rate))
+    chunks: list = []
+    elapsed_frames = 0
+    elapsed_seconds = 0.0
+    noise_floor_rms: float | None = None
+    speech_detected = False
+    silence_run_seconds = 0.0
+
+    while elapsed_frames < total_frames:
+        frames_this_chunk = min(chunk_frames, total_frames - elapsed_frames)
+        chunk = sd.rec(frames_this_chunk, samplerate=native_sample_rate, channels=channels, dtype="float32", device=device)
+        sd.wait()
+        chunks.append(chunk)
+        chunk_seconds = frames_this_chunk / native_sample_rate
+        elapsed_frames += frames_this_chunk
+        elapsed_seconds += chunk_seconds
+
+        if not auto_stop_enabled:
+            continue
+
+        chunk_arr = np.asarray(chunk, dtype=np.float32)
+        chunk_rms = float(np.sqrt(np.mean(chunk_arr.astype(np.float64) ** 2))) if chunk_arr.size else 0.0
+
+        if noise_floor_rms is None:
+            # The very first chunk calibrates this recording's own noise floor -- never
+            # itself judged as speech or silence, since there's nothing to compare it to yet.
+            noise_floor_rms = chunk_rms
+            continue
+
+        active_threshold = max(noise_floor_rms * _ACTIVE_RMS_MULTIPLIER, _ACTIVE_RMS_ABSOLUTE_FLOOR)
+        if chunk_rms >= active_threshold:
+            speech_detected = True
+            silence_run_seconds = 0.0
+        else:
+            silence_run_seconds += chunk_seconds
+
+        if speech_detected and elapsed_seconds >= min_duration_seconds and silence_run_seconds >= silence_timeout_seconds:
+            logger.info(
+                "Voice capture auto-stopped after %.2fs (%.2fs of trailing silence following "
+                "detected speech, noise_floor_rms=%.5f) instead of waiting for the full %.1fs window.",
+                elapsed_seconds, silence_run_seconds, noise_floor_rms, max_duration_seconds,
+            )
+            break
+
+    else:
+        # Loop exited by running out of `max_duration_seconds` rather than via the
+        # early-stop `break` above (which already logged its own reason). Logging this
+        # path too -- not just the early-stop one -- means a future diagnosis never has to
+        # guess which of the two happened; the two log lines are mutually exclusive.
+        if not auto_stop_enabled:
+            reason = "auto-stop disabled"
+        elif not speech_detected:
+            reason = "no speech detected"
+        else:
+            reason = "trailing silence never reached %.1fs (got %.2fs)" % (silence_timeout_seconds, silence_run_seconds)
+        logger.info(
+            "Voice capture ran to the full %.1fs window (%s, noise_floor_rms=%s).",
+            elapsed_seconds, reason, f"{noise_floor_rms:.5f}" if noise_floor_rms is not None else "n/a",
+        )
+
+    if not chunks:
+        return np.zeros((0, channels), dtype=np.float32)
+    return np.concatenate(chunks, axis=0)
+
+
 def record_from_microphone(duration_seconds: float, *, sample_rate: int = VOICE_SAMPLE_RATE_HZ) -> list[float]:
     """Local PC push-to-talk capture. Sets the visible mic-active indicator for exactly the
     duration audio is actively being captured, per RFC-009's 'Visible state' requirement --
@@ -327,17 +441,32 @@ def record_from_microphone(duration_seconds: float, *, sample_rate: int = VOICE_
         raise VoiceCaptureError(_describe_sounddevice_import_failure(error)) from error
 
     device, native_sample_rate, channels = _input_device_settings()
-    frame_count = int(duration_seconds * native_sample_rate)
+    config = get_effective_runtime_config()
+    auto_stop_enabled = bool(config.get("voice_talk_auto_stop_on_silence", True))
+    silence_timeout_seconds = float(config.get("voice_talk_silence_timeout_seconds", DEFAULT_SILENCE_TIMEOUT_SECONDS))
+    min_duration_seconds = min(
+        float(config.get("voice_talk_min_duration_seconds", DEFAULT_MIN_RECORDING_SECONDS)), duration_seconds
+    )
     logger.info(
-        "Recording %.1fs of voice input from device=%s (native %d Hz, %d channel(s))",
+        "Recording up to %.1fs of voice input from device=%s (native %d Hz, %d channel(s)); "
+        "auto-stop on silence=%s (timeout=%.1fs, min=%.1fs)",
         duration_seconds, device, native_sample_rate, channels,
+        auto_stop_enabled, silence_timeout_seconds, min_duration_seconds,
     )
 
     with state.lock:
         state.mic_active = True
     try:
-        recording = sd.rec(frame_count, samplerate=native_sample_rate, channels=channels, dtype="float32", device=device)
-        sd.wait()
+        recording = _capture_native_audio(
+            sd,
+            device=device,
+            native_sample_rate=native_sample_rate,
+            channels=channels,
+            max_duration_seconds=duration_seconds,
+            auto_stop_enabled=auto_stop_enabled,
+            silence_timeout_seconds=silence_timeout_seconds,
+            min_duration_seconds=min_duration_seconds,
+        )
     except Exception as error:
         logger.error(
             "Microphone recording failed on device=%s (native %d Hz, %d channel(s)): %s",

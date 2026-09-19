@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Callable
 
 from app.brain.audit.audit_log import record_audit_event
@@ -17,7 +18,15 @@ from app.brain.voice.verification import VOICE_SAMPLE_RATE_HZ, SpeechBrainVerifi
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_PUSH_TO_TALK_SECONDS = 6.0
+
+# RFC-009 latency fix: this used to be the *fixed* recording length -- `voice talk` always
+# recorded for exactly this long no matter how quickly the owner finished speaking, which
+# was reported as most of a ~7s wait after speaking. `record_from_microphone` now stops
+# recording shortly after it detects trailing silence following speech (see
+# `app.brain.voice.audio_io._capture_native_audio`), so this is only the *upper bound* a
+# recording can run to (e.g. background noise never reading as real silence) -- raised from
+# the original 6.0s since auto-stop, not this ceiling, now determines the typical length.
+DEFAULT_PUSH_TO_TALK_SECONDS = 10.0
 DEFAULT_ENROLLMENT_SAMPLE_SECONDS = 4.0
 
 
@@ -176,23 +185,51 @@ class VoiceController:
         speech" concern that hard boundary existed to avoid, so it stays available (and
         still the safer choice) via `config set voice_require_speaker_verification true`."""
         self._require_enabled()
+        turn_started = time.perf_counter()
+        verify_seconds = 0.0
         if bool(self.effective_config().get("voice_require_speaker_verification", False)):
+            verify_started = time.perf_counter()
             self._verify_owner(samples)
+            verify_seconds = time.perf_counter() - verify_started
+
+        transcribe_started = time.perf_counter()
         transcript = self.stt_provider().transcribe(samples, VOICE_SAMPLE_RATE_HZ)
+        transcribe_seconds = time.perf_counter() - transcribe_started
         if not transcript.strip():
             raise VoiceProviderError("No speech was recognized.")
+
+        route_started = time.perf_counter()
         reply_text = route_text(transcript)
+        route_seconds = time.perf_counter() - route_started
+
         reply_audio = b""
+        tts_seconds = 0.0
+        tts_started = time.perf_counter()
         try:
             reply_audio = self.tts_provider().synthesize(reply_text)
         except VoiceProviderError:
             pass  # the text reply is still meaningful even if TTS is unavailable/misconfigured
+        tts_seconds = time.perf_counter() - tts_started
+
+        # RFC-009 latency investigation: the owner reported a long wait *after* speaking,
+        # before an action happened. Recording itself is timed separately by
+        # `record_from_microphone`/`push_to_talk_local`'s caller; this covers everything
+        # after the recording ends, so it's clear from the logs alone whether a slow turn
+        # is STT, the routed command's own processing (e.g. a local LLM planning step), or
+        # TTS -- rather than guessing which stage to optimize next.
+        logger.info(
+            "Voice turn timing: verify=%.2fs transcribe=%.2fs route=%.2fs tts=%.2fs post_capture_total=%.2fs",
+            verify_seconds, transcribe_seconds, route_seconds, tts_seconds, time.perf_counter() - turn_started,
+        )
         record_audit_event("voice_turn_completed", message="voice turn processed")
         return VoiceTurnResult(transcript=transcript, reply_text=reply_text, reply_audio_wav=reply_audio)
 
     def push_to_talk_local(self, *, route_text: Callable[[str], str], duration_seconds: float = DEFAULT_PUSH_TO_TALK_SECONDS) -> VoiceTurnResult:
         self._require_enabled()
+        capture_started = time.perf_counter()
         samples = record_from_microphone(duration_seconds)
+        capture_seconds = time.perf_counter() - capture_started
+        logger.info("Voice turn timing: capture=%.2fs", capture_seconds)
         result = self.handle_voice_turn(samples, route_text=route_text)
         if result.reply_audio_wav:
             try:
