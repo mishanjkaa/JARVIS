@@ -63,6 +63,14 @@ DEFAULT_SETTINGS = {
     "vision_provider": "ollama",
     "vision_model": "",
     "vision_ollama_base_url": "http://127.0.0.1:11434",
+    # Owner's explicit choice (2026-09-19 "screen understanding" discussion): a credential,
+    # not a tunable setting, exactly like location_shared_secret below -- deliberately left
+    # out of runtime_config.MUTABLE_KEYS so it can never be set via the `config set` command
+    # (which would otherwise put a real secret through voice transcription or shell history),
+    # only by editing config/config.json directly, or left unset entirely in favor of the
+    # standard GEMINI_API_KEY environment variable (app.brain.vision.gemini_provider checks
+    # that automatically when this is blank). Redacted by config_show()/config_get().
+    "vision_gemini_api_key": "",
     "vision_timeout_seconds": 90,
     "vision_max_file_size": 4194304,
     "vision_max_width": 4096,

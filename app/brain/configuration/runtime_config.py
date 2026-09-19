@@ -219,6 +219,9 @@ def get_runtime_config() -> dict[str, Any]:
         "vision_provider": "ollama",
         "vision_model": "",
         "vision_ollama_base_url": "http://127.0.0.1:11434",
+        # Credential, not a tunable setting -- see config/settings.py's comment on this same
+        # key. Deliberately excluded from MUTABLE_KEYS/_ALLOWED_KEYS below.
+        "vision_gemini_api_key": "",
         "vision_timeout_seconds": 90,
         "vision_max_file_size": 4_194_304,
         "vision_max_width": 4096,

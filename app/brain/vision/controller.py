@@ -35,6 +35,19 @@ class VisionController:
         if self._provider_override is not None:
             return self._provider_override
         config = self.effective_config()
+        # Owner's explicit choice (2026-09-19 "screen understanding" discussion): vision_provider
+        # selects between the local Ollama vision model (default -- fully private, never leaves
+        # the machine) and Google's Gemini cloud API (free tier, better real-world accuracy on
+        # small screen text, but image bytes are sent off-machine). Any value other than
+        # "gemini" keeps the previous, always-local Ollama behavior unchanged.
+        if str(config.get("vision_provider", "ollama")).strip().lower() == "gemini":
+            from app.brain.vision.gemini_provider import GeminiVisionProvider
+
+            return GeminiVisionProvider(
+                api_key=str(config.get("vision_gemini_api_key", "")),
+                model=str(config.get("vision_model", "")),
+                timeout=float(config.get("vision_timeout_seconds", 45)),
+            )
         return OllamaVisionProvider(
             base_url=str(config.get("vision_ollama_base_url", "http://127.0.0.1:11434")),
             model=str(config.get("vision_model", "")),

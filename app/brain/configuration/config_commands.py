@@ -11,8 +11,9 @@ from config.config_loader import get_config_path, load_config
 # RFC-010: location_shared_secret is a credential, not a tunable setting. It is excluded
 # from runtime_config.MUTABLE_KEYS (so it can never be set via `config set`, only by editing
 # config/config.json directly) and redacted here so `config show`/`config get` never echo it
-# back in plaintext.
-_REDACTED_CONFIG_KEYS = {"location_shared_secret"}
+# back in plaintext. vision_gemini_api_key (2026-09-19 "screen understanding" discussion,
+# see config/settings.py) is the same shape of credential and gets the same treatment.
+_REDACTED_CONFIG_KEYS = {"location_shared_secret", "vision_gemini_api_key"}
 
 
 def _effective_config() -> dict[str, Any]:
