@@ -30,6 +30,15 @@ DEFAULT_SETTINGS = {
     "filesystem_max_read_size": 65536,
     "filesystem_max_write_size": 65536,
     "filesystem_soft_delete": True,
+    # Owner's explicit choice (2026-09-19 boundary discussion): give JARVIS's filesystem
+    # and terminal tools access to the whole system drive, not just its own project
+    # folder, so it can act on real files (Desktop, Documents, Downloads, ...). Default
+    # False -- a fresh install/other user opts in deliberately, since this is a real
+    # widening of what a local AI model can touch. See
+    # app/brain/filesystem/path_policy.py's is_forbidden_system_location() for what stays
+    # off limits even when this is on (Windows/Program Files/System32, and any OTHER
+    # account's Users\<name> profile).
+    "filesystem_allow_full_disk_access": False,
     "developer_mode": False,
     "auto_execute_low_risk": True,
     "auto_execute_medium_project": True,

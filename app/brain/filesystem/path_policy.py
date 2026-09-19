@@ -3,17 +3,16 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from app.brain.configuration.runtime_config import get_effective_runtime_config
 from app.brain.filesystem.errors import FilesystemPathError
 from app.brain.filesystem.models import FilesystemResolvedPath
 from app.brain.filesystem.state import get_filesystem_state
 
-_WINDOWS_FORBIDDEN_SEGMENTS = {
-    "windows",
-    "program files",
-    "program files (x86)",
-    "system32",
-    "users",
-}
+# Windows/Program Files/System32 are never trusted, full stop, regardless of config.
+# "Users" is handled separately below (see is_forbidden_system_location) since the
+# assistant owner's own default trusted root legitimately lives under Users\<name> --
+# blocking that segment outright would break normal operation, not just protect anything.
+_FORBIDDEN_LOCATION_SEGMENTS = {"windows", "program files", "program files (x86)", "system32"}
 _ROOT_ANCHORED_RELATIVE_NAMES = {"trash"}
 
 
@@ -21,11 +20,59 @@ def default_project_root() -> Path:
     return _canonicalize(Path(__file__).parents[3])
 
 
+def _full_disk_access_enabled() -> bool:
+    try:
+        return bool(get_effective_runtime_config().get("filesystem_allow_full_disk_access", False))
+    except Exception:
+        return False
+
+
 def get_trusted_roots() -> list[Path]:
     state = get_filesystem_state()
     if state.trusted_roots:
         return [_canonicalize(root) for root in state.trusted_roots]
-    return [default_project_root()]
+    project_root = default_project_root()
+    if _full_disk_access_enabled():
+        # Owner's explicit choice: trust the whole system drive the project lives on,
+        # not just its own folder -- is_forbidden_system_location() still keeps Windows
+        # system/program directories and other accounts' profiles off limits regardless.
+        drive_root = Path(project_root.anchor) if project_root.anchor else project_root
+        return [_canonicalize(drive_root)]
+    return [project_root]
+
+
+def is_forbidden_system_location(path: Path) -> bool:
+    """True if `path` sits inside a Windows system/program directory, or inside a
+    Users\\<name> profile folder that belongs to someone other than the assistant
+    owner (whatever the OS reports as the current user's own home directory).
+
+    Checked against the fully resolved, canonicalized path -- not a raw argument
+    string -- so it can't be bypassed by a relative path that only becomes dangerous
+    once joined to a broad trusted root. Found the hard way: with only the whole
+    system drive trusted (filesystem_allow_full_disk_access), a relative argument like
+    "Users/someone_else/secrets.txt" never contains an absolute "C:\\Users\\..." string
+    for a substring check to catch, but resolves to exactly that once joined to the
+    drive root. Both app.brain.filesystem.path_policy and app.brain.terminal.policy call
+    this, so the two subsystems can't drift apart on what "off limits" means.
+    """
+    resolved = _canonicalize(path)
+    parts_lower = [part.lower() for part in resolved.parts]
+    if any(segment in parts_lower for segment in _FORBIDDEN_LOCATION_SEGMENTS):
+        return True
+    try:
+        home = _canonicalize(Path.home())
+    except Exception:
+        home = None
+    if home is not None:
+        try:
+            resolved.relative_to(home)
+            return False
+        except ValueError:
+            pass
+    for index, part in enumerate(parts_lower):
+        if part == "users" and index + 1 < len(parts_lower):
+            return True
+    return False
 
 
 def resolve_path(user_path: str | None, *, prefer_directory: bool = False, allow_missing: bool = True) -> FilesystemResolvedPath:
@@ -48,6 +95,8 @@ def resolve_path(user_path: str | None, *, prefer_directory: bool = False, allow
         joined = base_path
 
     resolved = _resolve_with_existing_ancestors(joined)
+    if is_forbidden_system_location(resolved):
+        raise FilesystemPathError("That path is not allowed.")
     root = _match_root(resolved, roots)
     relative_path = resolved.relative_to(root).as_posix()
     return FilesystemResolvedPath(root=root, absolute_path=resolved, relative_path="." if not relative_path else relative_path)
@@ -110,12 +159,11 @@ def _reject_unsafe_input(raw_value: str, candidate: Path) -> None:
     anchor = candidate.anchor.lower()
     if anchor and len(candidate.parts) <= 1:
         raise FilesystemPathError("Drive roots are not allowed.")
-    lower_value = raw_value.lower()
-    if any(segment in lower_value for segment in ("c:\\windows", "c:\\program files", "system32")):
-        raise FilesystemPathError("That path is not allowed.")
-    for part in candidate.parts:
-        if part.lower() in _WINDOWS_FORBIDDEN_SEGMENTS and candidate.is_absolute():
-            raise FilesystemPathError("That path is not allowed.")
+    # Forbidden-location checking (Windows/Program Files/System32, other users' profiles)
+    # happens once, below in resolve_path(), against the fully resolved absolute path --
+    # not here against the raw argument -- so it can't be bypassed by a relative path
+    # that only becomes dangerous once joined to a broad trusted root. See
+    # is_forbidden_system_location()'s docstring for why that distinction matters.
 
 
 def _resolve_with_existing_ancestors(path: Path) -> Path:

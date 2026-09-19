@@ -318,6 +318,21 @@ class TerminalRuntimeTests(unittest.TestCase):
         self.assertTrue(decision.allowed)
         self.assertEqual(Path(decision.working_directory), self.root)
 
+    def test_relative_path_into_a_system_directory_under_a_broad_trusted_root_is_rejected(self) -> None:
+        # The historical check here only looked at the path argument's FINAL component
+        # ("evil.py", not "system32"), and only against a raw absolute-looking string --
+        # neither catches a RELATIVE argument that resolves into a system directory once
+        # joined to a broad trusted root (e.g. the whole system drive, once
+        # filesystem_allow_full_disk_access is enabled elsewhere). Reproduced here without
+        # that config by trusting a folder that itself contains a "Windows/System32" path,
+        # which is exactly the shape a widened trusted root would produce.
+        (self.root / "Windows" / "System32").mkdir(parents=True, exist_ok=True)
+        result = self.controller.execute_from_arguments(
+            self._terminal_arguments(arguments=["Windows/System32/evil.py"], raw_command="python Windows/System32/evil.py")
+        )
+        self.assertEqual(result.status, TerminalExecutionStatus.REJECTED)
+        self.assertIn("That path is not allowed.", result.stderr)
+
     def test_trusted_root_enforcement_rejects_traversal(self) -> None:
         result = self.controller.execute_from_arguments(
             self._terminal_arguments(arguments=["../outside.py"], raw_command="python ../outside.py")

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from app.brain.configuration.runtime_config import get_effective_runtime_config
-from app.brain.filesystem.path_policy import get_trusted_roots
+from app.brain.filesystem.path_policy import get_trusted_roots, is_forbidden_system_location
 from app.brain.terminal.errors import TerminalPolicyError, TerminalWorkingDirectoryError
 from app.brain.terminal.models import TerminalCommandRequest, TerminalPolicyDecision
 from config.config_loader import load_config
@@ -289,7 +289,13 @@ def _validate_local_path_argument(value: str, working_directory: Path) -> None:
     _reject_symlink_ancestor(normalized)
     if not _is_inside_trusted_roots(normalized):
         raise TerminalPolicyError("That path is not allowed.")
-    if normalized.name.lower() in {"system32", "windows"}:
+    # Checks the whole resolved path, not just its final component -- "C:\Windows\
+    # System32\evil.py" has a leaf name of "evil.py", which a name-only check (the
+    # previous behavior here) would wave straight through. Shared with
+    # app.brain.filesystem.path_policy so terminal and filesystem operations can't
+    # disagree about what's off limits, including other accounts' Users\<name> profiles
+    # once filesystem_allow_full_disk_access trusts the whole system drive.
+    if is_forbidden_system_location(normalized):
         raise TerminalPolicyError("That path is not allowed.")
 
 
