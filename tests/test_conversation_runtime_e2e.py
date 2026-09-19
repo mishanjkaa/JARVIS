@@ -51,6 +51,22 @@ class ConversationRuntimeEndToEndTests(unittest.TestCase):
             self.assertEqual(route_command("What is the capital of France?"), "Paris is the capital of France.")
         self.assertEqual(len(provider.prompts), 1)
 
+    def test_prompt_instructs_the_model_to_reply_in_the_user_s_language(self) -> None:
+        # Real-hardware bug: with a stronger local model swapped in (qwen2.5:7b-instruct),
+        # a reply to Russian input came back with stray Chinese characters mixed into an
+        # otherwise-Russian sentence. The system prompt sent to the model was entirely in
+        # English with no instruction about matching the user's language or avoiding
+        # code-switching, which is exactly the kind of prompt shape that invites this on a
+        # multilingual model. This isn't a guarantee (a local model can still misbehave),
+        # but the instruction needs to actually be there.
+        set_runtime_config_value("ai_enabled", True)
+        provider = _FakeProvider()
+        with patch.object(_CONVERSATION_RUNTIME, "provider", provider):
+            route_command("Привет, как дела?")
+        prompt = provider.prompts[-1]
+        self.assertIn("same natural language", prompt)
+        self.assertIn("never mix languages or scripts", prompt)
+
     def test_deterministic_command_does_not_call_ollama(self) -> None:
         set_runtime_config_value("ai_enabled", True)
         provider = _FakeProvider()
