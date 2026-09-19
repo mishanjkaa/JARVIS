@@ -856,9 +856,20 @@ class SpeechBrainModelLoadingTests(unittest.TestCase):
         real_file.write_text("data", encoding="utf-8")
         working_link_target = directory / "real.txt"
         working_link = directory / "working_link"
-        working_link.symlink_to(working_link_target)
         broken_link = directory / "broken_link"
-        broken_link.symlink_to(directory / "does-not-exist.txt")
+        try:
+            working_link.symlink_to(working_link_target)
+            broken_link.symlink_to(directory / "does-not-exist.txt")
+        except OSError as error:
+            # The exact real-world condition this whole class exists to work around
+            # (`OSError: [WinError 1314] A required privilege is not held by the client`)
+            # also blocks *this test itself* from creating a symlink at all on a plain
+            # Windows account without Developer Mode/admin -- so on that same machine, the
+            # test that verifies the symlink-cleanup helper can never get past its own
+            # setup. Skip rather than fail: this is an environment limitation, not a
+            # regression in `_clear_broken_symlinks` (which is exercised for the
+            # missing-directory and already-clean cases regardless).
+            self.skipTest(f"cannot create symlinks in this environment: {error}")
         self.assertTrue(broken_link.is_symlink())
         self.assertFalse(broken_link.exists())  # dangling: target doesn't resolve
 
