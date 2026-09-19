@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 from app.brain.agent.state import reset_agent_runtime_state
 from app.brain.audit.audit_log import reset_audit_log
-from app.brain.configuration.runtime_config import reset_runtime_config
+from app.brain.configuration.runtime_config import reset_runtime_config, set_runtime_config_value
 from app.brain.context.history import clear_history, get_history
 from app.brain.context.state import get_context, reset_context
 from app.brain.filesystem.state import reset_filesystem_state
@@ -35,6 +35,10 @@ class RouterTests(unittest.TestCase):
         self.assertIn("memory list", result)
 
     def test_unknown_command(self) -> None:
+        # ai_enabled now defaults to True (owner's explicit request: JARVIS should be
+        # usable immediately at startup) -- this test is specifically about the
+        # disabled-state fallback message, so it turns AI off itself.
+        set_runtime_config_value("ai_enabled", False)
         self.assertEqual(route_command("fly"), "AI is disabled right now.")
 
     @patch("app.brain.router.get_system_info")
@@ -232,6 +236,9 @@ class RouterTests(unittest.TestCase):
     def test_voice_commands(self) -> None:
         # voice_status() now reports enabled/mic-active/enrolled state (RFC-009), mirroring
         # vision status/location status, rather than the old fixed "Voice is enabled/disabled."
+        # voice_enabled now defaults to True (owner's explicit request), so this test turns
+        # it off itself first to exercise the "no" -> "yes" -> "no" transition it's after.
+        set_runtime_config_value("voice_enabled", False)
         self.assertIn("Voice enabled: no", route_command("voice status"))
         self.assertEqual(route_command("voice on"), "Voice enabled for this session.")
         self.assertIn("Voice enabled: yes", route_command("voice status"))

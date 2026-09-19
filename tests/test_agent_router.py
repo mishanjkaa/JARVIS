@@ -48,7 +48,10 @@ class AgentRouterRegressionTests(unittest.TestCase):
         self.assertEqual(route_command("conversation summary"), "No conversation entries yet.")
 
     def test_configuration_get_and_rejection(self) -> None:
-        self.assertEqual(route_command("config get ai_enabled"), "False")
+        # ai_enabled now defaults to True (owner's explicit request: JARVIS should be
+        # usable immediately at startup, no "ai on" needed) -- this test is really about
+        # "config get" round-tripping a value, ai_enabled just being a convenient example.
+        self.assertEqual(route_command("config get ai_enabled"), "True")
         self.assertEqual(route_command("config get unknown_key"), "Configuration key not found.")
 
     @patch("app.brain.router.config_set")

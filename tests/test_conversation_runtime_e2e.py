@@ -73,6 +73,10 @@ class ConversationRuntimeEndToEndTests(unittest.TestCase):
             self.assertEqual(route_command("Tell me something interesting."), "Conversation is unavailable right now.")
 
     def test_ai_disabled_returns_safe_response(self) -> None:
+        # ai_enabled now defaults to True (owner's explicit request: JARVIS should be
+        # usable immediately at startup) -- this test is specifically about the
+        # disabled-state fallback message, so it turns AI off itself.
+        set_runtime_config_value("ai_enabled", False)
         self.assertEqual(route_command("Tell me something interesting."), "AI is disabled right now.")
 
     def test_conversation_disabled_returns_safe_response(self) -> None:

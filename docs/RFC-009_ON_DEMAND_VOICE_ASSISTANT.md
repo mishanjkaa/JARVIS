@@ -107,6 +107,15 @@ mic/speaker client, reusing the same Tailscale network as RFC-010's location tra
   enrollment and confirmed deletion, mirroring the face-enrollment shape already described
   as a permanent decision in `docs/VISION_ROADMAP.md`
 - `voice talk` — push-to-talk from the local PC microphone
+- `voice listen` — continuous push-to-talk: repeats the same turn `voice talk` does, one
+  after another, until a stop phrase or Ctrl+C, so the owner doesn't have to type `voice
+  talk` before every utterance. Not wake-word detection (see "Not supported" below) — it
+  is still push-to-talk under the hood, just automatically re-armed after each turn.
+  `voice_listen_on_startup` (default `true`) enters this loop automatically right after
+  JARVIS starts, alongside `ai_enabled`/`voice_enabled` now also defaulting to `true`, so a
+  fresh launch needs none of `ai on`/`voice on`/`voice talk` typed first — another
+  owner-requested friction reduction for a single-user local device, in the same vein as
+  the speaker-verification opt-in change above.
 
 ## Not supported in RFC-009
 
@@ -132,7 +141,11 @@ mic/speaker client, reusing the same Tailscale network as RFC-010's location tra
   pass verification, so voice alone should not gate anything the project wouldn't already
   let a LOW-risk action do
 - wake-word detection in this first version (deferred; see "Implementation notes" below) —
-  both the local PC and the phone client are push-to-talk only for now
+  both the local PC and the phone client are push-to-talk only for now. `voice listen`
+  (above) covers the "don't make me type a command every time" friction without wake-word
+  detection: it is a loop of push-to-talk turns, not an always-on model listening for a
+  trigger phrase, so it still uses the microphone for its full capture window each turn
+  rather than only reacting to a spoken name
 
 ## Visible state
 

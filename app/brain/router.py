@@ -40,7 +40,7 @@ from app.brain.skills.calculator import calculate_expression
 from app.brain.skills.self_check import run_self_check
 from app.brain.skills.system_info import get_local_date, get_local_time
 from app.brain.voice.controller import get_voice_controller
-from app.brain.voice.errors import VoiceError
+from app.brain.voice.errors import VoiceCaptureError, VoiceDisabledError, VoiceError, VoiceProviderError
 from app.brain.voice.voice_controller import voice_cancel_enrollment, voice_controller, voice_enroll, voice_forget_me, voice_off, voice_on, voice_status
 from app.brain.runtime.conversation_runtime import ConversationRuntime
 from app.brain.configuration.runtime_config import get_effective_runtime_config, set_runtime_config_value
@@ -767,6 +767,15 @@ Exit
             except VoiceError as error:
                 return str(error)
 
+        if normalized_command == "voice listen" or normalized_command == "voice stop listening":
+            # "voice stop listening" typed here means the owner wasn't (or is no longer)
+            # inside an active loop -- there is nothing to stop, since a running loop
+            # itself blocks this exact code path until it returns. Kept as a command so
+            # typing it never falls through to "unrecognized" confusingly.
+            if normalized_command == "voice stop listening":
+                return "Not currently listening continuously."
+            return _voice_listen_loop()
+
         if normalized_command == "exit":
             logger.info("Recognized command: exit")
             return "shutdown"
@@ -782,3 +791,68 @@ Exit
     except Exception:
         logger.exception("An error occurred while processing a command")
         return "Sorry, something went wrong while processing your command."
+
+
+_VOICE_LISTEN_STOP_PHRASES = {
+    "stop listening", "stop voice listening", "voice stop", "stop voice",
+    "стоп", "хватит", "хватит слушать", "прекрати слушать", "останови прослушивание",
+}
+
+
+def _voice_listen_loop() -> str:
+    """RFC-009 follow-up, owner's explicit request: not having to type 'voice talk' before
+    every utterance. Repeats the same push-to-talk turn a single 'voice talk' already does
+    (capture with silence-triggered auto-stop, transcribe, route through this exact
+    `route_command` function, speak the reply) over and over, printing each reply as it
+    happens, until interrupted by Ctrl+C or a recognized stop phrase -- rather than a true
+    always-on wake-word engine, which RFC-009 explicitly left out of scope (it would need a
+    new always-listening audio pipeline and a wake-word-detection dependency neither of
+    which this loop requires; it is still push-to-talk under the hood, just automatically
+    re-armed after every turn instead of waiting for the owner to type the command again).
+
+    A quiet gap between utterances naturally produces an empty transcript
+    (`VoiceProviderError: "No speech was recognized."`) via the same auto-stop-on-silence
+    capture 'voice talk' uses -- expected here, not an error, so it is swallowed silently
+    rather than printed every idle cycle (this loop otherwise re-captures immediately, so a
+    silent room just means back-to-back ~1-2s idle captures until real speech arrives).
+    `VoiceDisabledError`/`VoiceCaptureError` are structural (voice got turned off, or the
+    microphone itself is broken/unavailable) rather than "nothing said this cycle", so
+    those end the loop instead of retrying forever.
+
+    A recognized stop phrase is intercepted in the `route_text` callback itself, before it
+    ever reaches the real `route_command` -- not checked afterwards against whatever came
+    back -- so saying "stop listening" ends the loop cleanly instead of also being routed
+    through conversation/AI (which would produce and speak an unrelated generic reply to a
+    phrase that was never meant as an actual command)."""
+    print(
+        "JARVIS: Listening continuously -- just talk, no need to say 'voice talk' first. "
+        "Say a stop phrase (e.g. 'stop listening') or press Ctrl+C to go back to typing."
+    )
+    controller = get_voice_controller()
+    stop_requested = False
+
+    def _route_unless_stop_phrase(transcript: str) -> str:
+        nonlocal stop_requested
+        if transcript.strip().lower() in _VOICE_LISTEN_STOP_PHRASES:
+            stop_requested = True
+            return "Stopped continuous voice listening."
+        return route_command(transcript)
+
+    try:
+        while True:
+            try:
+                result = controller.push_to_talk_local(route_text=_route_unless_stop_phrase)
+            except VoiceProviderError:
+                continue
+            except (VoiceDisabledError, VoiceCaptureError) as error:
+                return str(error)
+            except VoiceError as error:
+                print(f"JARVIS: {error}")
+                continue
+            print(f"JARVIS: {result.reply_text}")
+            if stop_requested:
+                return "Stopped continuous voice listening."
+            if result.reply_text == "shutdown":
+                return "shutdown"
+    except KeyboardInterrupt:
+        return "Stopped continuous voice listening."
