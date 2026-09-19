@@ -33,3 +33,25 @@ class CommandNormalizerTests(unittest.TestCase):
     def test_memory_aliases(self) -> None:
         self.assertEqual(normalize_command("what is my favorite_ide"), "recall favorite_ide")
         self.assertEqual(normalize_command("forget my favorite_ide"), "forget favorite_ide")
+
+    def test_russian_voice_aliases_route_to_the_same_deterministic_commands(self) -> None:
+        # RFC-009 follow-up: the owner's real voice requests, transcribed as Russian text,
+        # were falling through to the AI/agent runtime and being handled unreliably (see
+        # open_website()'s docstring). These map the same well-known actions the English
+        # aliases above already cover.
+        self.assertEqual(normalize_command("привет"), "hello")
+        self.assertEqual(normalize_command("который час"), "time")
+        self.assertEqual(normalize_command("какая сегодня дата"), "date")
+        self.assertEqual(normalize_command("открой браузер"), "open browser")
+        self.assertEqual(normalize_command("открой блокнот"), "open notepad")
+        self.assertEqual(normalize_command("открой ютуб"), "open youtube")
+        self.assertEqual(normalize_command("открой гугл"), "open google")
+        self.assertEqual(normalize_command("выход"), "exit")
+
+    def test_open_site_russian_alias_carries_the_target_through(self) -> None:
+        self.assertEqual(normalize_command("открой сайт job.pt"), "open site job.pt")
+        self.assertEqual(normalize_command("Открой Сайт GitHub.com"), "open site github.com")
+        # No target given -- distinct from a missing command entirely, so the router can
+        # give a clear "please specify which site" answer instead of an "unrecognized
+        # command" one.
+        self.assertEqual(normalize_command("открой сайт"), "open site")

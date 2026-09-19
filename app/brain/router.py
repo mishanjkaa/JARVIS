@@ -17,7 +17,7 @@ from app.brain.computer.power_actions import execute_power_action
 from app.brain.computer.system_info import get_computer_name, get_disk_space, get_system_info
 from app.brain.context.history import clear_history, get_history, record_safe_command
 from app.brain.context.state import get_context, update_context
-from app.brain.internet.web_actions import open_github, open_youtube, search_web
+from app.brain.internet.web_actions import open_github, open_google, open_website, open_youtube, search_web
 from app.brain.location.controller import get_location_controller
 from app.brain.memory.store import (
     CATEGORY_LEARNED_PATTERN,
@@ -205,6 +205,8 @@ Computer
 Internet
 - open youtube
 - open github
+- open google
+- open site <address>
 - search <query>
 
 Calculator
@@ -679,6 +681,26 @@ Exit
             result = open_youtube()
             if result.startswith("Opened"):
                 update_context(last_opened_application="YouTube")
+                record_safe_command("application opened")
+            return result
+
+        if normalized_command == "open google":
+            logger.info("Recognized command: open google")
+            result = open_google()
+            if result.startswith("Opened"):
+                update_context(last_opened_application="Google")
+                record_safe_command("application opened")
+            return result
+
+        if normalized_command == "open site" or normalized_command.startswith("open site "):
+            # Deliberately deterministic, not AI-planned -- see open_website()'s docstring
+            # for why: the owner's own real voice requests to open a specific site were
+            # being mishandled by the AI/agent runtime before this existed.
+            target = normalized_command[len("open site"):].strip()
+            logger.info("Recognized command: open site")
+            result = open_website(target)
+            if result.startswith("Opened"):
+                update_context(last_opened_application=target or "site")
                 record_safe_command("application opened")
             return result
 

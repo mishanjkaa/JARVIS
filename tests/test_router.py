@@ -187,6 +187,50 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(route_command("open github"), "Opened GitHub.")
 
     @patch("app.brain.internet.web_actions.webbrowser.open")
+    def test_open_google(self, open_mock) -> None:
+        open_mock.return_value = True
+        self.assertEqual(route_command("open google"), "Opened Google.")
+        open_mock.assert_called_once_with("https://www.google.com")
+
+    @patch("app.brain.internet.web_actions.webbrowser.open")
+    def test_open_site_with_a_domain(self, open_mock) -> None:
+        open_mock.return_value = True
+        self.assertEqual(route_command("open site job.pt"), "Opened job.pt.")
+        open_mock.assert_called_once_with("https://job.pt")
+
+    @patch("app.brain.internet.web_actions.webbrowser.open")
+    def test_open_site_with_a_known_short_name(self, open_mock) -> None:
+        open_mock.return_value = True
+        self.assertEqual(route_command("open site youtube"), "Opened youtube.")
+        open_mock.assert_called_once_with("https://www.youtube.com")
+
+    def test_open_site_without_a_target_asks_for_one_instead_of_guessing(self) -> None:
+        self.assertEqual(
+            route_command("open site"),
+            "Please specify which site to open, for example 'open site github.com'.",
+        )
+
+    @patch("app.brain.internet.web_actions.webbrowser.open")
+    def test_open_site_with_an_unrecognized_bare_word_does_not_guess_a_url(self, open_mock) -> None:
+        self.assertEqual(
+            route_command("open site somethingmadeup"),
+            "I don't recognize 'somethingmadeup' as a website. Try a full address instead, "
+            "e.g. 'open site example.com'.",
+        )
+        open_mock.assert_not_called()
+
+    @patch("app.brain.internet.web_actions.webbrowser.open")
+    def test_open_site_russian_voice_phrasing(self, open_mock) -> None:
+        # This is the exact real-world failure this was added to fix: the owner's spoken
+        # "открой сайт <адрес>" was previously falling through to the AI/agent runtime,
+        # which sometimes tried (and failed) to reach the URL through the sandboxed
+        # terminal tool, and sometimes just hallucinated a conversational reply without
+        # opening anything.
+        open_mock.return_value = True
+        self.assertEqual(route_command("открой сайт job.pt"), "Opened job.pt.")
+        open_mock.assert_called_once_with("https://job.pt")
+
+    @patch("app.brain.internet.web_actions.webbrowser.open")
     def test_search_query_is_encoded(self, open_mock) -> None:
         open_mock.return_value = True
         self.assertEqual(route_command("search OpenAI GPT-5"), "Opened search results for: OpenAI GPT-5")

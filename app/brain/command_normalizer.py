@@ -69,10 +69,43 @@ def normalize_command(command: str) -> str:
         "quit": "exit",
         "shutdown jarvis": "exit",
         "goodbye": "exit",
+        # Russian aliases for the owner's most common spoken commands (RFC-009's `voice
+        # listen` transcribes her speech as Russian text via faster-whisper's language
+        # detection, and this router otherwise only recognizes English command text) --
+        # covers the same well-defined, deterministic actions already listed above rather
+        # than letting them fall through to the AI/agent runtime, which handled these
+        # unreliably (see open_website()'s docstring in app/brain/internet/web_actions.py
+        # for the specific "open a site" failure this was added to fix).
+        "привет": "hello",
+        "здравствуй": "hello",
+        "здравствуйте": "hello",
+        "который час": "time",
+        "сколько времени": "time",
+        "какая сегодня дата": "date",
+        "какое сегодня число": "date",
+        "помощь": "help",
+        "команды": "help",
+        "открой блокнот": "open notepad",
+        "открой калькулятор": "open calculator",
+        "открой браузер": "open browser",
+        "открой ютуб": "open youtube",
+        "открой youtube": "open youtube",
+        "открой гитхаб": "open github",
+        "открой github": "open github",
+        "открой гугл": "open google",
+        "открой google": "open google",
+        "открой сайт": "open site",
+        "выход": "exit",
+        "пока": "exit",
+        "закрой джарвис": "exit",
     }
 
     if lowered in alias_map:
         return alias_map[lowered]
+
+    if lowered.startswith("открой сайт "):
+        site = normalized[len("открой сайт "):].strip()
+        return f"open site {site.lower()}" if site else "open site"
 
     if lowered.startswith("remember that "):
         rest = normalized[len("remember that "):]
