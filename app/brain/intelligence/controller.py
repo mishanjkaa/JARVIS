@@ -227,7 +227,7 @@ class IntelligenceController:
                 request_record.status = "browser_unavailable"
                 request_record.message = "Browser runtime is unavailable right now."
                 return request_record.message
-        if task.requested_operation.startswith("vision_") and not task.requested_operation.startswith("vision_unsupported"):
+        if (task.requested_operation.startswith("vision_") and not task.requested_operation.startswith("vision_unsupported")) or task.requested_operation.startswith("desktop_visual_"):
             vision_status = get_vision_controller().status()
             if not vision_status.configured or not vision_status.base_url_allowed or not vision_status.provider_reachable or not vision_status.model_installed or not vision_status.image_capability_ready:
                 self.state.last_status = "vision_unavailable"
@@ -849,6 +849,8 @@ def _merged_requested_operation(value: str, fallback_task: NaturalLanguageTask) 
         return fallback_task.requested_operation
     if fallback_task.requested_operation.startswith("vision_") and not candidate.startswith("vision_"):
         return fallback_task.requested_operation
+    if fallback_task.requested_operation.startswith("desktop_visual_") and not candidate.startswith("desktop_visual_"):
+        return fallback_task.requested_operation
     if fallback_task.requested_operation == "git_status" and candidate not in {"git_status", "git_read_only"}:
         return fallback_task.requested_operation
     if fallback_task.requires_execution and fallback_task.requested_artifacts and candidate in {"read", "show", "inspect"}:
@@ -871,8 +873,16 @@ def _tool_enabled(tool_name: str, config: dict[str, Any]) -> bool:
         "vision.find_visual_element_in_browser_capture",
     }:
         return bool(config.get("vision_enabled", True)) and bool(config.get("vision_browser_capture_enabled", True))
+    if tool_name in {
+        "vision.describe_desktop_capture",
+        "vision.extract_text_from_desktop_capture",
+        "vision.find_visual_element_in_desktop_capture",
+    }:
+        return bool(config.get("vision_enabled", True)) and bool(config.get("vision_desktop_capture_enabled", True))
     if tool_name.startswith("vision."):
         return bool(config.get("vision_enabled", True))
+    if tool_name.startswith("desktop."):
+        return bool(config.get("vision_desktop_capture_enabled", True))
     return True
 
 
@@ -885,6 +895,8 @@ def _tool_restrictions(tool_name: str) -> list[str]:
         return ["public URLs only", "redirects revalidated", "no arbitrary JavaScript execution", "isolated browser sessions only"]
     if tool_name.startswith("vision."):
         return ["trusted local image files only", "no remote URLs", "image contents are untrusted data", "no automatic actions from OCR or visual instructions"]
+    if tool_name.startswith("desktop."):
+        return ["one-shot capture only", "requires plan approval (MEDIUM risk)", "screen contents are untrusted data"]
     return []
 
 
@@ -952,6 +964,20 @@ def _preferred_tool_names(task: NaturalLanguageTask) -> set[str]:
         if task.requested_operation == "vision_find_visual_element":
             return {"vision.find_visual_element"}
         return set()
+    if task.requested_operation.startswith("desktop_visual_"):
+        # Owner-requested (2026-09-19 "screen understanding" discussion): mirrors the
+        # browser_visual_* narrowing above -- restricts the planner to just the desktop
+        # capture + matching vision tool instead of the whole catalog, since this project's
+        # local/free LLMs have repeatedly proven unreliable at picking the right tools out
+        # of a large catalog on their own.
+        names = {"desktop.capture_screen", "desktop.capture_window", "desktop.list_windows"}
+        if task.requested_operation == "desktop_visual_describe":
+            names.add("vision.describe_desktop_capture")
+        elif task.requested_operation == "desktop_visual_extract_text":
+            names.add("vision.extract_text_from_desktop_capture")
+        elif task.requested_operation == "desktop_visual_find_element":
+            names.add("vision.find_visual_element_in_desktop_capture")
+        return names
     if task.read_only_task:
         names = {
             "filesystem.list_directory",

@@ -135,6 +135,23 @@ def normalize_command(command: str) -> str:
         "выход": "exit",
         "пока": "exit",
         "закрой джарвис": "exit",
+        # Real-hardware gap found while wiring up the new Gemini vision provider
+        # (2026-09-19): desktop.capture_screen is a MEDIUM-risk plan step, so a spoken
+        # request like "что у меня на экране" produces a plan that needs "approve plan"/
+        # "cancel plan" before it runs -- but those only existed in English, forcing a
+        # Russian-speaking hands-free session to switch languages mid-conversation just to
+        # approve or cancel. These cover the same two router commands in Russian.
+        "подтверди план": "approve plan",
+        "подтвердить план": "approve plan",
+        "подтверждаю план": "approve plan",
+        "одобряю план": "approve plan",
+        "одобрить план": "approve plan",
+        "выполни план": "approve plan",
+        "отмени план": "cancel plan",
+        "отменить план": "cancel plan",
+        "отмена плана": "cancel plan",
+        "отклони план": "cancel plan",
+        "отклонить план": "cancel plan",
     }
 
     if lowered in alias_map:

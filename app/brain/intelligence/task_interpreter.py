@@ -156,11 +156,88 @@ _VISION_IMAGE_HINT_PATTERN = re.compile(
     r"(\u0438\u0437\u043e\u0431\u0440\u0430\u0436\u0435\u043d|\u043a\u0430\u0440\u0442\u0438\u043d|\u0444\u043e\u0442\u043e|\u0432\u0438\u0437\u0443\u0430\u043b|\u0442\u0435\u043a\u0441\u0442 \u043d\u0430 \u0438\u0437\u043e\u0431\u0440\u0430\u0436\u0435\u043d)",
     re.IGNORECASE,
 )
+# NOTE (2026-09-19, real-hardware bug): this used to also block "desktop"/"screen
+# capture"/"window capture" and Russian "\u044d\u043a\u0440\u0430\u043d"/"\u043e\u043a\u043d\u043e", written back when RFC-007A was
+# vision's only capability (describe/OCR/find on a trusted local image FILE only -- no
+# screen access at all). RFC-007C later added real desktop screenshot support
+# (desktop.capture_screen/capture_window + vision.describe_desktop_capture and friends),
+# but this blocklist was never updated, so a live request like "\u0434\u0436\u0430\u0440\u0432\u0438\u0441 \u0447\u0442\u043e \u0442\u044b \u0432\u0438\u0434\u0438\u0448\u044c \u043d\u0430
+# \u044d\u043a\u0440\u0430\u043d\u0435" was still hard-rejected with "not implemented in RFC-007A" before it ever reached
+# the part of the system that actually now supports it -- see
+# _requested_desktop_visual_operation() below, which is checked first and gives screen/
+# desktop requests their own supported classification instead of falling into this
+# catch-all. Camera/webcam/face-recognition/speaker-verification/live-microphone/captcha/QR
+# genuinely still have no implementation anywhere in this project, so those stay blocked.
 _VISION_UNSUPPORTED_PATTERN = re.compile(
-    r"\b(camera|webcam|desktop|screen capture|window capture|face|recognition|speaker|voice|microphone|captcha|qr)\b|"
-    r"(\u043a\u0430\u043c\u0435\u0440|\u0432\u0435\u0431\u043a\u0430\u043c|\u044d\u043a\u0440\u0430\u043d|\u043e\u043a\u043d\u043e|\u043b\u0438\u0446|\u0440\u0430\u0441\u043f\u043e\u0437\u043d\u0430\u0432|\u0433\u043e\u043b\u043e\u0441|\u043c\u0438\u043a\u0440\u043e\u0444\u043e\u043d|\u043a\u0430\u043f\u0447|\u043a\u0443\u0430\u0440)",
+    r"\b(camera|webcam|face|recognition|speaker|voice|microphone|captcha|qr)\b|"
+    r"(\u043a\u0430\u043c\u0435\u0440|\u0432\u0435\u0431\u043a\u0430\u043c|\u043b\u0438\u0446|\u0440\u0430\u0441\u043f\u043e\u0437\u043d\u0430\u0432|\u0433\u043e\u043b\u043e\u0441|\u043c\u0438\u043a\u0440\u043e\u0444\u043e\u043d|\u043a\u0430\u043f\u0447|\u043a\u0443\u0430\u0440)",
     re.IGNORECASE,
 )
+# Owner-requested (2026-09-19 "screen understanding" discussion): a deterministic
+# classification for "what's on my screen" style requests, mirroring how
+# _requested_browser_visual_operation() narrows the LLM planner's tool catalog down to
+# just the relevant browser+vision tools instead of leaving it to choose from the entire
+# catalog. Deliberately keyed on "screen"/"desktop"/"monitor" (and Russian equivalents) so
+# it never overlaps with the browser-visual patterns above, which are keyed on "page"/
+# "tab"/"website"/"site" instead.
+_DESKTOP_VISUAL_HINT_PATTERN = re.compile(
+    r"\b(screen|desktop)\b|"
+    r"\b(my|the) monitor\b|"
+    r"(\u044d\u043a\u0440\u0430\u043d|\u0440\u0430\u0431\u043e\u0447\u0435\u043c \u0441\u0442\u043e\u043b\u0435|\u043c\u043e\u043d\u0438\u0442\u043e\u0440)",
+    re.IGNORECASE,
+)
+_DESKTOP_VISUAL_FIND_PATTERN = re.compile(
+    r"\b(find|locate)\b.*\b(on (my |the )?screen|on (my |the )?desktop)\b|"
+    r"(\u043d\u0430\u0439\u0434\u0438|\u043e\u0442\u044b\u0449\u0438).*(\u043d\u0430 \u044d\u043a\u0440\u0430\u043d\u0435|\u043d\u0430 \u0440\u0430\u0431\u043e\u0447\u0435\u043c \u0441\u0442\u043e\u043b\u0435)",
+    re.IGNORECASE,
+)
+_DESKTOP_VISUAL_TEXT_PATTERN = re.compile(
+    r"\b(read|extract)\b.*\b(screen|desktop)\b|"
+    r"(\u043f\u0440\u043e\u0447\u0438\u0442\u0430\u0439|\u0438\u0437\u0432\u043b\u0435\u043a\u0438).*(\u044d\u043a\u0440\u0430\u043d)",
+    re.IGNORECASE,
+)
+_DESKTOP_VISUAL_DESCRIBE_PATTERN = re.compile(
+    r"\b(what'?s on|what is on|describe|look at|tell me what'?s on|capture)\b.*\b(my screen|the screen|screen|desktop)\b|"
+    r"\b(what do you see|what can you see)\b",
+    re.IGNORECASE,
+)
+# Real owner-reported failure (2026-09-19): a spoken "what's on my screen" request,
+# transcribed as Russian, fell through to the plain conversational AI (which then
+# hallucinated a "I can't see anything, I'm virtual" reply, occasionally with mixed-in
+# Chinese characters) because the exact phrase spoken didn't match the rigid, fixed-word-
+# order Russian alternatives above ("\u0447\u0442\u043e \u043d\u0430 \u044d\u043a\u0440\u0430\u043d\u0435", "\u0447\u0442\u043e \u0442\u044b \u0432\u0438\u0434\u0438\u0448\u044c", "\u0447\u0442\u043e \u0432\u0438\u0434\u043d\u043e" -- each
+# locked to that exact sequence). Natural spoken Russian doesn't reliably keep that order
+# or stick to one verb ("\u0433\u043b\u044f\u043d\u044c \u0447\u0442\u043e \u0442\u0430\u043c \u043d\u0430 \u044d\u043a\u0440\u0430\u043d\u0435", "\u0441\u043a\u0430\u0436\u0438, \u0447\u0442\u043e \u0441\u0435\u0439\u0447\u0430\u0441 \u043f\u0440\u043e\u0438\u0441\u0445\u043e\u0434\u0438\u0442 \u043d\u0430
+# \u044d\u043a\u0440\u0430\u043d\u0435", "\u0447\u0442\u043e \u0432\u044b \u0432\u0438\u0434\u0438\u0442\u0435"), so this uses the same word-level keyword-set approach already
+# proven for _ru_open_intent_command() in command_normalizer.py instead of phrase-locked
+# regex alternation.
+_RU_DESKTOP_DESCRIBE_VERBS = {
+    "\u0432\u0438\u0434\u0438\u0448\u044c",  # \u0432\u0438\u0434\u0438\u0448\u044c
+    "\u0432\u0438\u0434\u0435\u0448\u044c",  # \u0432\u0438\u0434\u0435\u0448\u044c (common misspelling/mishearing)
+    "\u0432\u0438\u0434\u0438\u0442\u0435",  # \u0432\u0438\u0434\u0438\u0442\u0435
+    "\u0432\u0438\u0436\u0443",  # \u0432\u0438\u0436\u0443
+    "\u0432\u0438\u0434\u043d\u043e",  # \u0432\u0438\u0434\u043d\u043e
+    "\u043f\u043e\u043a\u0430\u0436\u0438",  # \u043f\u043e\u043a\u0430\u0436\u0438
+    "\u0440\u0430\u0441\u0441\u043a\u0430\u0436\u0438",  # \u0440\u0430\u0441\u0441\u043a\u0430\u0436\u0438
+    "\u0441\u043a\u0430\u0436\u0438",  # \u0441\u043a\u0430\u0436\u0438
+    "\u043e\u0431\u044a\u044f\u0441\u043d\u0438",  # \u043e\u0431\u044a\u044f\u0441\u043d\u0438
+    "\u0433\u043b\u044f\u043d\u044c",  # \u0433\u043b\u044f\u043d\u044c
+    "\u0432\u0437\u0433\u043b\u044f\u043d\u0438",  # \u0432\u0437\u0433\u043b\u044f\u043d\u0438
+    "\u043f\u043e\u0441\u043c\u043e\u0442\u0440\u0438",  # \u043f\u043e\u0441\u043c\u043e\u0442\u0440\u0438
+    "\u0441\u043c\u043e\u0442\u0440\u0438",  # \u0441\u043c\u043e\u0442\u0440\u0438
+    "\u043e\u043f\u0438\u0448\u0438",  # \u043e\u043f\u0438\u0448\u0438
+    "\u043f\u0440\u043e\u0438\u0441\u0445\u043e\u0434\u0438\u0442",  # \u043f\u0440\u043e\u0438\u0441\u0445\u043e\u0434\u0438\u0442
+}
+
+
+def _ru_desktop_describe_intent(normalized: str) -> bool:
+    lowered_words = [word.strip(",.!?\u2014-\u00ab\u00bb") for word in normalized.lower().split()]
+    if any(word in _RU_DESKTOP_DESCRIBE_VERBS for word in lowered_words):
+        return True
+    # No-verb fallback: a bare "\u0447\u0442\u043e ... \u043d\u0430 \u044d\u043a\u0440\u0430\u043d\u0435" (what's [there] on [my] screen) with
+    # no explicit verb at all still counts -- the caller already confirmed a screen/
+    # desktop/monitor mention is present somewhere in the sentence.
+    return "\u0447\u0442\u043e" in lowered_words  # \u0447\u0442\u043e (what)
 _BROWSER_VISUAL_DESCRIBE_PATTERN = re.compile(
     r"\b(visually describe|describe .*visible|what is visible|what's visible|look at .*visible)\b|"
     r"(\u0432\u0438\u0437\u0443\u0430\u043b\u044c\u043d\u043e \u043e\u043f\u0438\u0448\u0438|"
@@ -205,6 +282,7 @@ def interpret_task(raw_input: str, *, clarification_request: ClarificationReques
     requested_operation = _requested_operation(normalized, artifacts, read_only_task, requires_tests, requires_execution)
     browser_operation = _requested_browser_operation(normalized, artifacts, referenced_urls)
     browser_visual_operation = _requested_browser_visual_operation(normalized, referenced_urls)
+    desktop_visual_operation = _requested_desktop_visual_operation(normalized)
     vision_operation = _requested_vision_operation(normalized, referenced_paths)
     requires_code_write = _requires_written_artifact(normalized)
 
@@ -332,6 +410,38 @@ def interpret_task(raw_input: str, *, clarification_request: ClarificationReques
             requires_tests=False,
             requires_code_write=False,
             requested_operation=effective_browser_operation,
+        )
+
+    if desktop_visual_operation and not browser_visual_operation:
+        constraints: list[TaskConstraint] = []
+        query = _extract_vision_query(normalized)
+        if query:
+            constraints.append(TaskConstraint("vision_query", query))
+        detail_level = _extract_vision_detail_level(normalized)
+        if detail_level:
+            constraints.append(TaskConstraint("vision_detail_level", detail_level))
+        return NaturalLanguageTask(
+            raw_input=text,
+            normalized_input=normalized,
+            intent=TaskIntent.ACTIONABLE_TASK,
+            confidence=ConfidenceCategory.HIGH,
+            goal=normalized,
+            expected_result=_expected_result(normalized, artifacts, output_texts, desktop_visual_operation),
+            referenced_paths=referenced_paths,
+            constraints=constraints,
+            language=language,
+            requested_artifacts=artifacts,
+            requested_contents=contents,
+            requested_output_texts=output_texts,
+            requested_summary=requires_summary or desktop_visual_operation == "desktop_visual_describe",
+            read_only_task=True,
+            destructive_scope_unclear=False,
+            requires_execution=False,
+            requires_verification=True,
+            requires_stdout_match=False,
+            requires_tests=False,
+            requires_code_write=False,
+            requested_operation=desktop_visual_operation,
         )
 
     if vision_operation == "vision_unsupported":
@@ -919,6 +1029,12 @@ def _expected_result(normalized: str, artifacts: list[str], output_texts: list[s
         return "image text"
     if requested_operation == "vision_find_visual_element":
         return "matching visual element"
+    if requested_operation == "desktop_visual_describe":
+        return "screen description"
+    if requested_operation == "desktop_visual_extract_text":
+        return "screen text"
+    if requested_operation == "desktop_visual_find_element":
+        return "matching element on screen"
     if requested_operation == "browser_visual_describe":
         return "grounded browser visual description"
     if requested_operation == "browser_visual_extract_text":
@@ -946,6 +1062,50 @@ def _looks_like_direct_command(normalized: str) -> bool:
 
 def _browser_submission_is_prohibited(normalized: str) -> bool:
     return _BROWSER_NO_SUBMIT_PATTERN.search(normalized) is not None
+
+
+def _requested_desktop_visual_operation(normalized: str) -> str:
+    hint_present = _DESKTOP_VISUAL_HINT_PATTERN.search(normalized) is not None
+    if hint_present:
+        if _DESKTOP_VISUAL_FIND_PATTERN.search(normalized):
+            return "desktop_visual_find_element"
+        if _DESKTOP_VISUAL_TEXT_PATTERN.search(normalized):
+            return "desktop_visual_extract_text"
+        if _DESKTOP_VISUAL_DESCRIBE_PATTERN.search(normalized) or _ru_desktop_describe_intent(normalized):
+            return "desktop_visual_describe"
+    # Real owner-reported failure (2026-09-19): plain "what do you see?" / "что ты
+    # видишь?" style questions never mention "screen"/"desktop"/"экран" at all -- the
+    # user doesn't need to name what JARVIS is looking at, since screen capture is
+    # JARVIS's only visual sense. Those phrases were written into
+    # _DESKTOP_VISUAL_DESCRIBE_PATTERN from the start, but living inside the
+    # hint_present-gated block above meant they could never actually match (the hint
+    # gate always failed first) -- effectively dead code since RFC-007C. This check
+    # runs unconditionally so a bare "what/что do you see" question is recognized on
+    # its own, without requiring a screen/desktop mention.
+    if _bare_what_do_you_see(normalized):
+        return "desktop_visual_describe"
+    return ""
+
+
+_WHAT_DO_YOU_SEE_PATTERN = re.compile(r"\b(what do you see|what can you see)\b", re.IGNORECASE)
+
+
+def _bare_what_do_you_see(normalized: str) -> bool:
+    if _WHAT_DO_YOU_SEE_PATTERN.search(normalized):
+        return True
+    lowered_words = [word.strip(",.!?—-«»") for word in normalized.lower().split()]
+    has_question_word = "что" in lowered_words  # что (what)
+    has_seeing_verb = any(
+        word in {
+            "видишь",  # видишь
+            "видешь",  # видешь
+            "видите",  # видите
+            "видно",  # видно
+            "наблюдаешь",  # наблюдаешь
+        }
+        for word in lowered_words
+    )
+    return has_question_word and has_seeing_verb
 
 
 def _requested_vision_operation(normalized: str, referenced_paths: list[str]) -> str:

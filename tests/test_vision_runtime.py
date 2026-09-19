@@ -20,6 +20,7 @@ from app.brain.browser.controller import get_browser_controller, reset_browser_c
 from app.brain.browser.state import reset_browser_state
 from app.brain.browser.url_policy import BrowserUrlPolicy
 from app.brain.configuration.runtime_config import get_effective_runtime_config, get_runtime_config, replace_runtime_config, reset_runtime_config, set_runtime_config_value
+from config.config_loader import set_config_path_override
 from app.brain.filesystem.state import reset_filesystem_state, set_trusted_roots
 from app.brain.intelligence.controller import IntelligenceController, reset_intelligence_controller
 from app.brain.intelligence.dynamic_planner import DynamicPlanner
@@ -289,6 +290,16 @@ class VisionRuntimeTests(unittest.TestCase):
         self.fixture_source = Path("tests/fixtures/vision_sample.png")
         self.fixture_path = self.root / "vision_sample.png"
         shutil.copy2(self.fixture_source, self.fixture_path)
+        # Isolate from the real config/config.json -- without this override,
+        # get_effective_runtime_config() (used by VisionController.provider(), among
+        # others) reads whatever is actually persisted on disk, e.g. a real machine
+        # that has legitimately run `config set vision_provider gemini` for everyday
+        # use. Tests here assume a clean, default config (vision_provider="ollama",
+        # etc.) regardless of what's saved for real use, so they need their own empty
+        # config file, the same isolation tests/test_runtime_config.py already uses.
+        self.config_path = self.root / "config.json"
+        self.config_path.write_text("{}", encoding="utf-8")
+        set_config_path_override(self.config_path)
         reset_runtime_config()
         reset_filesystem_state()
         reset_terminal_state()
@@ -305,6 +316,7 @@ class VisionRuntimeTests(unittest.TestCase):
         reset_vision_controller(provider=self.fake_provider)
 
     def tearDown(self) -> None:
+        set_config_path_override(None)
         reset_runtime_config()
         reset_filesystem_state()
         reset_terminal_state()
@@ -739,11 +751,86 @@ class VisionRuntimeTests(unittest.TestCase):
         response = controller.handle("Describe the image.")
         self.assertEqual(response, "What exact image path do you want me to analyze?")
 
-    def test_unsupported_camera_desktop_face_and_voice_requests_remain_blocked(self) -> None:
+    def test_unsupported_camera_face_and_voice_requests_remain_blocked(self) -> None:
+        # Camera/webcam/face-recognition/live-microphone genuinely have no implementation
+        # anywhere in this project (unlike desktop capture -- see the next test), so these
+        # stay hard-rejected with the RFC-007A message.
         controller = self._controller()
         self.assertEqual(controller.handle("Use the camera to recognize the face."), "That Vision capability is not implemented in RFC-007A yet.")
-        self.assertEqual(controller.handle("Capture the desktop and analyze it."), "That Vision capability is not implemented in RFC-007A yet.")
         self.assertEqual(controller.handle("Listen to the microphone and analyze the voice."), "That Vision capability is not implemented in RFC-007A yet.")
+
+    def test_desktop_capture_requests_are_no_longer_reported_as_unsupported(self) -> None:
+        # Real-hardware bug (2026-09-19): RFC-007C added real desktop screenshot support
+        # (desktop.capture_screen + vision.describe_desktop_capture and friends), but this
+        # exact phrasing used to still be hard-rejected with the RFC-007A "not implemented"
+        # message because the unsupported-request blocklist was never updated for it. It
+        # must not return that message anymore -- see test_intelligence_runtime.py for the
+        # positive classification into desktop_visual_describe and the narrowed tool catalog.
+        controller = self._controller()
+        self.assertNotEqual(controller.handle("Capture the desktop and analyze it."), "That Vision capability is not implemented in RFC-007A yet.")
+
+    def test_screen_understanding_requests_classify_as_actionable_desktop_visual_tasks(self) -> None:
+        # Owner-requested (2026-09-19 "screen understanding" discussion): both the exact
+        # real-hardware phrasing that triggered the RFC-007A bug ("что ты видишь на
+        # экране") and its natural English/Russian variants must now be recognized as
+        # supported, ACTIONABLE requests -- not silently rejected and not left to fall
+        # through to a vague conversational reply either.
+        for raw_input in (
+            "Jarvis, what's on my screen?",
+            "Describe my screen.",
+            "Джарвис, что ты видишь на экране?",
+            "что у меня на экране",
+            "опиши экран",
+        ):
+            task = self._vision_task(raw_input)
+            self.assertEqual(task.requested_operation, "desktop_visual_describe", msg=raw_input)
+            self.assertEqual(task.intent, TaskIntent.ACTIONABLE_TASK, msg=raw_input)
+
+    def test_bare_what_do_you_see_requests_classify_as_desktop_visual_without_screen_keyword(self) -> None:
+        # Real owner-reported failure (2026-09-19): after RFC-007C shipped, a spoken
+        # "что ты видишь?" / "что видно?" style question -- with NO "screen"/"desktop"/
+        # "экран" word at all -- fell through to the plain conversational AI, which
+        # hallucinated a "I can't see anything, I'm virtual" reply (with stray Chinese
+        # characters mixed in). Root cause: these phrases were written into
+        # _DESKTOP_VISUAL_DESCRIBE_PATTERN from the start, but that pattern only ever ran
+        # after _DESKTOP_VISUAL_HINT_PATTERN matched a screen/desktop/monitor mention --
+        # so a bare "what do you see" could never actually reach it. This locks in the
+        # fix: these phrases must classify as desktop_visual_describe on their own, and
+        # tolerate natural word order/filler/verb variation (not just the one exact
+        # phrase), the same way _ru_open_intent_command() already tolerates it for
+        # "open site" requests.
+        for raw_input in (
+            "what do you see",
+            "What can you see?",
+            "что ты видишь",
+            "что видно",
+            "Джарвис, что ты видишь?",
+            "что вы видите",
+            "скажи, что ты сейчас видишь",
+        ):
+            task = self._vision_task(raw_input)
+            self.assertEqual(task.requested_operation, "desktop_visual_describe", msg=raw_input)
+            self.assertEqual(task.intent, TaskIntent.ACTIONABLE_TASK, msg=raw_input)
+
+    def test_unrelated_seeing_verb_without_a_question_is_not_misclassified(self) -> None:
+        # The bare "what do you see" fallback above is intentionally narrow (requires
+        # "что"/"what" together with a seeing verb, or the exact English phrase) so it
+        # doesn't fire on unrelated sentences that merely contain a seeing verb.
+        task = self._vision_task("ты не видишь разницы в коде")
+        self.assertNotEqual(task.requested_operation, "desktop_visual_describe")
+
+    def test_read_screen_text_and_find_on_screen_requests_classify_distinctly(self) -> None:
+        self.assertEqual(self._vision_task("Read the text on my screen.").requested_operation, "desktop_visual_extract_text")
+        self.assertEqual(self._vision_task("прочитай текст на экране").requested_operation, "desktop_visual_extract_text")
+        self.assertEqual(self._vision_task("Find the Save button on my screen.").requested_operation, "desktop_visual_find_element")
+        self.assertEqual(self._vision_task("найди кнопку сохранить на экране").requested_operation, "desktop_visual_find_element")
+
+    def test_browser_page_requests_are_not_misclassified_as_desktop_visual(self) -> None:
+        # _DESKTOP_VISUAL_HINT_PATTERN and the browser-visual hint pattern are keyed on
+        # disjoint vocabulary (screen/desktop/monitor vs. page/tab/website/site) precisely
+        # so a request about the current browser page never gets routed to desktop capture.
+        task = self._vision_task("What's visible on the current page?")
+        self.assertNotEqual(task.requested_operation, "desktop_visual_describe")
 
     def test_exact_image_path_is_preserved(self) -> None:
         task = self._vision_task("Describe image vision_sample.png.")
