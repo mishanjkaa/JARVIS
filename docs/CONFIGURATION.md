@@ -11,9 +11,11 @@ RFC-007A and RFC-007B keep Vision configuration separate from the text intellige
 - `vision_enabled`
   Enables or disables the Vision Runtime.
 - `vision_provider`
-  Provider name for local image analysis. RFC-007A supports only `ollama`.
+  Provider selecting which Vision backend runs image analysis: `ollama` (default, fully local) or `gemini` (Google's cloud API, RFC-011).
 - `vision_model`
-  Local multimodal Ollama model name. This is independent from `intelligence_model`.
+  Multimodal model name for the selected `vision_provider`. This is independent from `intelligence_model`.
+- `vision_gemini_api_key`
+  Credential, not a tunable setting -- only settable by editing `config/config.json` directly, never via `config set`, and always redacted (`<redacted>`) by `config show`/`config get`. Falls back to the `GEMINI_API_KEY` environment variable when blank (recommended, so the key never sits in a config file at all).
 - `vision_ollama_base_url`
   Ollama base URL for image analysis. RFC-007A accepts only loopback addresses.
 - `vision_timeout_seconds`
@@ -48,6 +50,31 @@ RFC-007A and RFC-007B keep Vision configuration separate from the text intellige
 RFC-007B browser captures remain temporary, loopback-only, and metadata-only outside the private capture store. They do not expose filesystem paths, bytes, base64, or reusable screenshot artifacts to the planner.
 
 RFC-007A and RFC-007B do not support remote image URLs, camera input, external image upload, or persistent Vision evidence export.
+
+## Text/Reasoning Intelligence Providers
+
+RFC-011 makes the text/reasoning model used for both natural-language planning
+(`IntelligenceController`) and plain conversation (`ConversationRuntime`) selectable,
+independent of the local-only `ollama_model`/`ollama_base_url` keys used before it. One
+config change switches both planning and chat together.
+
+- `intelligence_enabled`
+  Enables or disables natural-language planning. Plain conversation has its own separate `ai_enabled`/`ai_allow_conversation` keys.
+- `intelligence_provider`
+  Provider selecting which text/reasoning backend handles planning and conversation: `ollama` (default, fully local) or `gemini` (Google's cloud API, RFC-011). An unrecognized value resolves to "provider unavailable" rather than a crash.
+- `intelligence_model`
+  Model name for the selected `intelligence_provider`. For `ollama`, an unset value falls back to `ollama_model`; for `gemini`, it must be set explicitly (no fallback, since `ollama_model`'s default is an Ollama-specific model name that would be meaningless for a cloud provider).
+- `intelligence_gemini_api_key`
+  Credential, not a tunable setting -- same protection as `vision_gemini_api_key` above (excluded from `config set`, redacted from `config show`/`config get`, editable only via `config/config.json`). When blank, falls back to `vision_gemini_api_key`, then the `GEMINI_API_KEY` environment variable -- so setting the key once for vision already makes text/reasoning usable too, unless a separate key is explicitly configured.
+- `intelligence_timeout_seconds`, `intelligence_max_plan_steps`, `intelligence_max_context_chars`, `intelligence_max_recent_messages`, `intelligence_max_planning_attempts`
+  Unchanged by RFC-011, apply uniformly regardless of which provider is active.
+
+Vision and text/reasoning providers are independent axes -- `vision_provider` and
+`intelligence_provider` can be set differently (for example, `ollama` for vision and
+`gemini` for reasoning, or vice versa). Screen-understanding requests ("what's on my
+screen", "что на экране") are classified deterministically before either provider is
+consulted (see `app/brain/intelligence/task_interpreter.py`) and behave identically
+regardless of which text/reasoning provider is active.
 
 ## Desktop Capture
 
