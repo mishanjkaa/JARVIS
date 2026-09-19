@@ -336,15 +336,31 @@ def _capture_native_audio(
     silence_timeout_seconds: float,
     min_duration_seconds: float,
 ):
-    """Captures native-format audio in `_CAPTURE_CHUNK_SECONDS` chunks via repeated
-    `sd.rec()` calls (rather than one blocking call for the full duration), stopping as
-    soon as `silence_timeout_seconds` of trailing silence follows detected speech, once at
-    least `min_duration_seconds` has elapsed -- so a push-to-talk recording ends shortly
-    after the owner stops talking instead of always running to `max_duration_seconds`.
-    Falls back to running the full `max_duration_seconds` when `auto_stop_enabled` is
-    False, when nothing is ever detected as speech (silence throughout, e.g. a completely
-    quiet room or test double), or as long as the calibrated noise floor keeps every chunk
-    below the active threshold."""
+    """Captures native-format audio in `_CAPTURE_CHUNK_SECONDS` chunks read from a single,
+    continuously-running `sd.InputStream` (rather than one blocking call for the full
+    duration), stopping as soon as `silence_timeout_seconds` of trailing silence follows
+    detected speech, once at least `min_duration_seconds` has elapsed -- so a push-to-talk
+    recording ends shortly after the owner stops talking instead of always running to
+    `max_duration_seconds`. Falls back to running the full `max_duration_seconds` when
+    `auto_stop_enabled` is False, when nothing is ever detected as speech (silence
+    throughout, e.g. a completely quiet room or test double), or as long as the calibrated
+    noise floor keeps every chunk below the active threshold.
+
+    RFC-009 real-hardware correction: an earlier version of this function issued one
+    `sd.rec()`/`sd.wait()` call per chunk -- each of which opens and closes the audio
+    stream from scratch. On the owner's real Windows target machine this cost roughly
+    200ms of open/close overhead *per 0.2s chunk*, measured via `Voice turn timing:
+    capture=...` logging a nominal 10.0s capture actually taking 20-22s wall-clock time --
+    worse than the fixed-duration recording this whole feature was meant to shorten. Worse
+    still, repeatedly tearing down and recreating the stream appears to have kept this
+    machine's "Microphone Array" driver (see the hardware note above -- the same array mic
+    whose native-format quirks motivated capturing at its own rate/channel count in the
+    first place) from ever settling into capturing real signal: those 20+ second captures
+    measured rms ~0.00004-0.0002 throughout, roughly 100-1000x quieter than a genuine
+    utterance captured a few minutes earlier in the same session (rms ~0.03-0.07) --
+    i.e. the owner's actual speech, not silence, wasn't reaching the recorded buffer at
+    all. Reading repeatedly from one stream that is opened once and never closed until the
+    whole capture is done avoids both problems."""
     import numpy as np
 
     chunk_frames = max(1, int(native_sample_rate * _CAPTURE_CHUNK_SECONDS))
@@ -361,57 +377,57 @@ def _capture_native_audio(
     speech_detected = False
     silence_run_seconds = 0.0
 
-    while elapsed_frames < total_frames:
-        frames_this_chunk = min(chunk_frames, total_frames - elapsed_frames)
-        chunk = sd.rec(frames_this_chunk, samplerate=native_sample_rate, channels=channels, dtype="float32", device=device)
-        sd.wait()
-        chunks.append(chunk)
-        chunk_seconds = frames_this_chunk / native_sample_rate
-        elapsed_frames += frames_this_chunk
-        elapsed_seconds += chunk_seconds
+    with sd.InputStream(samplerate=native_sample_rate, channels=channels, dtype="float32", device=device) as stream:
+        while elapsed_frames < total_frames:
+            frames_this_chunk = min(chunk_frames, total_frames - elapsed_frames)
+            chunk, _overflowed = stream.read(frames_this_chunk)
+            chunks.append(chunk)
+            chunk_seconds = frames_this_chunk / native_sample_rate
+            elapsed_frames += frames_this_chunk
+            elapsed_seconds += chunk_seconds
 
-        if not auto_stop_enabled:
-            continue
+            if not auto_stop_enabled:
+                continue
 
-        chunk_arr = np.asarray(chunk, dtype=np.float32)
-        chunk_rms = float(np.sqrt(np.mean(chunk_arr.astype(np.float64) ** 2))) if chunk_arr.size else 0.0
+            chunk_arr = np.asarray(chunk, dtype=np.float32)
+            chunk_rms = float(np.sqrt(np.mean(chunk_arr.astype(np.float64) ** 2))) if chunk_arr.size else 0.0
 
-        if noise_floor_rms is None:
-            # The very first chunk calibrates this recording's own noise floor -- never
-            # itself judged as speech or silence, since there's nothing to compare it to yet.
-            noise_floor_rms = chunk_rms
-            continue
+            if noise_floor_rms is None:
+                # The very first chunk calibrates this recording's own noise floor -- never
+                # itself judged as speech or silence, since there's nothing to compare it to yet.
+                noise_floor_rms = chunk_rms
+                continue
 
-        active_threshold = max(noise_floor_rms * _ACTIVE_RMS_MULTIPLIER, _ACTIVE_RMS_ABSOLUTE_FLOOR)
-        if chunk_rms >= active_threshold:
-            speech_detected = True
-            silence_run_seconds = 0.0
+            active_threshold = max(noise_floor_rms * _ACTIVE_RMS_MULTIPLIER, _ACTIVE_RMS_ABSOLUTE_FLOOR)
+            if chunk_rms >= active_threshold:
+                speech_detected = True
+                silence_run_seconds = 0.0
+            else:
+                silence_run_seconds += chunk_seconds
+
+            if speech_detected and elapsed_seconds >= min_duration_seconds and silence_run_seconds >= silence_timeout_seconds:
+                logger.info(
+                    "Voice capture auto-stopped after %.2fs (%.2fs of trailing silence following "
+                    "detected speech, noise_floor_rms=%.5f) instead of waiting for the full %.1fs window.",
+                    elapsed_seconds, silence_run_seconds, noise_floor_rms, max_duration_seconds,
+                )
+                break
+
         else:
-            silence_run_seconds += chunk_seconds
-
-        if speech_detected and elapsed_seconds >= min_duration_seconds and silence_run_seconds >= silence_timeout_seconds:
+            # Loop exited by running out of `max_duration_seconds` rather than via the
+            # early-stop `break` above (which already logged its own reason). Logging this
+            # path too -- not just the early-stop one -- means a future diagnosis never has
+            # to guess which of the two happened; the two log lines are mutually exclusive.
+            if not auto_stop_enabled:
+                reason = "auto-stop disabled"
+            elif not speech_detected:
+                reason = "no speech detected"
+            else:
+                reason = "trailing silence never reached %.1fs (got %.2fs)" % (silence_timeout_seconds, silence_run_seconds)
             logger.info(
-                "Voice capture auto-stopped after %.2fs (%.2fs of trailing silence following "
-                "detected speech, noise_floor_rms=%.5f) instead of waiting for the full %.1fs window.",
-                elapsed_seconds, silence_run_seconds, noise_floor_rms, max_duration_seconds,
+                "Voice capture ran to the full %.1fs window (%s, noise_floor_rms=%s).",
+                elapsed_seconds, reason, f"{noise_floor_rms:.5f}" if noise_floor_rms is not None else "n/a",
             )
-            break
-
-    else:
-        # Loop exited by running out of `max_duration_seconds` rather than via the
-        # early-stop `break` above (which already logged its own reason). Logging this
-        # path too -- not just the early-stop one -- means a future diagnosis never has to
-        # guess which of the two happened; the two log lines are mutually exclusive.
-        if not auto_stop_enabled:
-            reason = "auto-stop disabled"
-        elif not speech_detected:
-            reason = "no speech detected"
-        else:
-            reason = "trailing silence never reached %.1fs (got %.2fs)" % (silence_timeout_seconds, silence_run_seconds)
-        logger.info(
-            "Voice capture ran to the full %.1fs window (%s, noise_floor_rms=%s).",
-            elapsed_seconds, reason, f"{noise_floor_rms:.5f}" if noise_floor_rms is not None else "n/a",
-        )
 
     if not chunks:
         return np.zeros((0, channels), dtype=np.float32)

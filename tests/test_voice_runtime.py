@@ -33,6 +33,49 @@ def _wav_bytes(*, sample_rate: int = VOICE_SAMPLE_RATE_HZ, num_samples: int = 16
     return buffer.getvalue()
 
 
+class _FakeInputStream:
+    """Test double for `sounddevice.InputStream`'s blocking-read context-manager protocol,
+    used by `_capture_native_audio`'s `with sd.InputStream(...) as stream:` followed by
+    repeated `stream.read(frames)` calls without ever closing/reopening the stream between
+    chunks. This replaced per-chunk `sd.rec()`/`sd.wait()` calls after real-hardware logs
+    showed each one costing ~200ms of stream open/close overhead (a nominal 10s capture
+    measured at 20-22s wall-clock) and, worse, seemingly preventing the array mic's driver
+    from ever settling into capturing real signal at all -- so there is now exactly one
+    stream instance per recording, and this double models that."""
+
+    def __init__(self, read_effect, **init_kwargs) -> None:
+        self.read_effect = read_effect
+        self.init_kwargs = init_kwargs
+        self.reads: list[int] = []
+
+    def __enter__(self) -> "_FakeInputStream":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        return False
+
+    def read(self, frames: int):
+        self.reads.append(frames)
+        return self.read_effect(frames, self.init_kwargs["channels"]), False
+
+
+def _patch_input_stream(sd_module, read_effect):
+    """Patches `sd_module.InputStream` with a factory building one `_FakeInputStream` per
+    call (matching real usage -- one stream per recording), driven by
+    `read_effect(frame_count, channels) -> ndarray`. The returned (unstarted) patcher
+    exposes every stream it created as `.instances` once the `with` block has run."""
+    instances: list[_FakeInputStream] = []
+
+    def factory(*, samplerate, channels, dtype, device):
+        stream = _FakeInputStream(read_effect, samplerate=samplerate, channels=channels, dtype=dtype, device=device)
+        instances.append(stream)
+        return stream
+
+    patcher = patch.object(sd_module, "InputStream", side_effect=factory)
+    patcher.instances = instances
+    return patcher
+
+
 class _FakeSTTProvider(STTProvider):
     def __init__(self, *, transcript: str = "remember that the sky is blue") -> None:
         self.transcript = transcript
@@ -351,11 +394,11 @@ class VoiceRuntimeTests(unittest.TestCase):
 
         seen_active = []
 
-        def fake_rec(frame_count, samplerate, channels, dtype, device=None):
+        def fake_read(frame_count, channels):
             seen_active.append(get_voice_state().mic_active)
-            return np.zeros((frame_count, channels), dtype=dtype)
+            return np.zeros((frame_count, channels), dtype="float32")
 
-        with patch.object(sd, "rec", side_effect=fake_rec), patch.object(sd, "wait", return_value=None):
+        with _patch_input_stream(sd, fake_read):
             self.assertFalse(get_voice_state().mic_active)
             audio_io.record_from_microphone(0.1)
             self.assertFalse(get_voice_state().mic_active)
@@ -372,24 +415,25 @@ class VoiceRuntimeTests(unittest.TestCase):
         set_runtime_config_value("voice_input_device", 1)
         set_runtime_config_value("voice_input_sample_rate", 44100)
         set_runtime_config_value("voice_input_channels", 4)
-        seen_calls = []
 
-        def fake_rec(frame_count, samplerate, channels, dtype, device=None):
-            seen_calls.append({"frame_count": frame_count, "samplerate": samplerate, "channels": channels, "device": device})
-            return np.zeros((frame_count, channels), dtype=dtype)
+        def fake_read(frame_count, channels):
+            return np.zeros((frame_count, channels), dtype="float32")
 
-        with patch.object(sd, "rec", side_effect=fake_rec), patch.object(sd, "wait", return_value=None):
+        patcher = _patch_input_stream(sd, fake_read)
+        with patcher:
             audio_io.record_from_microphone(1.0)
         # Silence throughout (all-zero chunks) never triggers the auto-stop-on-silence early
-        # exit, so capture runs the full 1.0s window -- but in `_CAPTURE_CHUNK_SECONDS` (0.2s)
-        # chunks via repeated `sd.rec()` calls now, not one big blocking call.
-        self.assertEqual(len(seen_calls), 5)
-        for call in seen_calls:
-            self.assertEqual(call["device"], 1)
-            self.assertEqual(call["samplerate"], 44100)
-            self.assertEqual(call["channels"], 4)
-            self.assertEqual(call["frame_count"], 8820)
-        self.assertEqual(sum(call["frame_count"] for call in seen_calls), 44100)
+        # exit, so capture runs the full 1.0s window -- read in `_CAPTURE_CHUNK_SECONDS`
+        # (0.2s) chunks from a single `sd.InputStream` opened once for the whole recording
+        # (RFC-009 latency-fix correction: repeated `sd.rec()` calls, one open/close per
+        # chunk, cost ~200ms of overhead each on real hardware -- see
+        # `_capture_native_audio`'s docstring), never reopened between chunks.
+        self.assertEqual(len(patcher.instances), 1)
+        stream = patcher.instances[0]
+        self.assertEqual(stream.init_kwargs["device"], 1)
+        self.assertEqual(stream.init_kwargs["samplerate"], 44100)
+        self.assertEqual(stream.init_kwargs["channels"], 4)
+        self.assertEqual(stream.reads, [8820, 8820, 8820, 8820, 8820])
 
     def test_record_from_microphone_downmixes_and_resamples_to_target_rate(self) -> None:
         import numpy as np
@@ -401,14 +445,14 @@ class VoiceRuntimeTests(unittest.TestCase):
         set_runtime_config_value("voice_input_sample_rate", 44100)
         set_runtime_config_value("voice_input_channels", 4)
 
-        def fake_rec(frame_count, samplerate, channels, dtype, device=None):
+        def fake_read(frame_count, channels):
             # A constant, non-zero signal on every channel -- averaging channels and
             # resampling a constant signal should still be (approximately) that constant,
             # which is enough to prove the downmix and resample both actually ran rather
             # than the raw 4-channel 44.1kHz buffer being handed straight to the caller.
-            return np.full((frame_count, channels), 0.25, dtype=dtype)
+            return np.full((frame_count, channels), 0.25, dtype="float32")
 
-        with patch.object(sd, "rec", side_effect=fake_rec), patch.object(sd, "wait", return_value=None):
+        with _patch_input_stream(sd, fake_read):
             samples = audio_io.record_from_microphone(1.0, sample_rate=VOICE_SAMPLE_RATE_HZ)
         # ~16000 samples for a 1s capture resampled to 16 kHz, not the native 44100.
         self.assertAlmostEqual(len(samples), VOICE_SAMPLE_RATE_HZ, delta=200)
@@ -423,23 +467,27 @@ class VoiceRuntimeTests(unittest.TestCase):
         from app.brain.voice import audio_io
 
         class _FakeSD:
+            """A minimal stand-in providing only `InputStream(...)`, returning the single
+            `_FakeInputStream` reused for every `.read()` call in this recording -- exactly
+            the real single-stream-per-recording usage `_capture_native_audio` relies on."""
+
             def __init__(self, amplitudes: list[float]) -> None:
-                self._amplitudes = amplitudes
-                self.calls: list[int] = []
+                self.stream = _FakeInputStream(
+                    # `.read()` records the call in `self.stream.reads` before invoking this
+                    # effect, so by the time it runs, `reads` already includes the current
+                    # (in-progress) call -- hence `- 1` to get this call's own 0-based index.
+                    lambda frames, channels: np.full((frames, channels), amplitudes[len(self.stream.reads) - 1], dtype="float32"),
+                    channels=1,
+                )
 
-            def rec(self, frame_count, samplerate, channels, dtype, device=None):
-                amplitude = self._amplitudes[len(self.calls)]
-                self.calls.append(frame_count)
-                return np.full((frame_count, channels), amplitude, dtype=dtype)
-
-            def wait(self) -> None:
-                return None
+            def InputStream(self, **kwargs):
+                return self.stream
 
         # Chunk 1 calibrates the noise floor (quiet). Chunk 2 is loud speech. Chunks 3-7
         # are quiet again -- 5 * 0.2s = 1.0s of trailing silence, enough to trigger the
-        # early stop once `min_duration_seconds` has also elapsed. A speech-detecting
-        # `_FakeSD` with fewer entries than the real implementation calls `rec()` would
-        # raise IndexError, so this also proves it never over-runs past the expected stop.
+        # early stop once `min_duration_seconds` has also elapsed. Fewer amplitude entries
+        # than the real implementation calls `.read()` would raise IndexError, so this also
+        # proves it never over-runs past the expected stop.
         fake_sd = _FakeSD([0.0001, 0.5, 0.0001, 0.0001, 0.0001, 0.0001, 0.0001])
 
         recording = audio_io._capture_native_audio(
@@ -452,7 +500,7 @@ class VoiceRuntimeTests(unittest.TestCase):
             silence_timeout_seconds=1.0,
             min_duration_seconds=1.0,
         )
-        self.assertEqual(len(fake_sd.calls), 7)
+        self.assertEqual(len(fake_sd.stream.reads), 7)
         # 7 chunks of 0.2s (8820 frames at 44100 Hz) = 1.4s total, well short of the 5.0s
         # ceiling -- proving capture stopped once trailing silence was detected instead of
         # always running to `max_duration_seconds`.
@@ -465,14 +513,10 @@ class VoiceRuntimeTests(unittest.TestCase):
 
         class _FakeSD:
             def __init__(self) -> None:
-                self.calls: list[int] = []
+                self.stream = _FakeInputStream(lambda frames, channels: np.zeros((frames, channels), dtype="float32"), channels=1)
 
-            def rec(self, frame_count, samplerate, channels, dtype, device=None):
-                self.calls.append(frame_count)
-                return np.zeros((frame_count, channels), dtype=dtype)
-
-            def wait(self) -> None:
-                return None
+            def InputStream(self, **kwargs):
+                return self.stream
 
         fake_sd = _FakeSD()
         recording = audio_io._capture_native_audio(
@@ -487,7 +531,7 @@ class VoiceRuntimeTests(unittest.TestCase):
         )
         # With auto-stop disabled, silence (even for the whole recording) never ends
         # capture early -- it always runs the full requested window: 0.6s / 0.2s chunks.
-        self.assertEqual(len(fake_sd.calls), 3)
+        self.assertEqual(len(fake_sd.stream.reads), 3)
         self.assertEqual(len(recording), 3 * 8820)
 
     def test_record_from_microphone_reports_device_on_failure(self) -> None:
@@ -498,10 +542,10 @@ class VoiceRuntimeTests(unittest.TestCase):
 
         set_runtime_config_value("voice_input_device", 12)
 
-        def fake_rec(frame_count, samplerate, channels, dtype, device=None):
+        def fake_input_stream(*, samplerate, channels, dtype, device):
             raise OSError("Invalid number of channels")
 
-        with patch.object(sd, "rec", side_effect=fake_rec):
+        with patch.object(sd, "InputStream", side_effect=fake_input_stream):
             with self.assertRaises(VoiceCaptureError) as context:
                 audio_io.record_from_microphone(1.0)
         self.assertIn("device 12", str(context.exception))
@@ -583,10 +627,10 @@ class VoiceRecordingDiagnosticsTests(unittest.TestCase):
 
         from app.brain.voice import audio_io
 
-        def fake_rec(frame_count, samplerate, channels, dtype, device=None):
-            return np.full((frame_count, channels), 0.3, dtype=dtype)
+        def fake_read(frame_count, channels):
+            return np.full((frame_count, channels), 0.3, dtype="float32")
 
-        with patch.object(sd, "rec", side_effect=fake_rec), patch.object(sd, "wait", return_value=None):
+        with _patch_input_stream(sd, fake_read):
             with self.assertLogs("app.brain.voice.audio_io", level="INFO") as logs:
                 audio_io.record_from_microphone(1.0, sample_rate=VOICE_SAMPLE_RATE_HZ)
 
@@ -602,10 +646,10 @@ class VoiceRecordingDiagnosticsTests(unittest.TestCase):
 
         from app.brain.voice import audio_io
 
-        def fake_rec(frame_count, samplerate, channels, dtype, device=None):
-            return np.full((frame_count, channels), 0.0005, dtype=dtype)
+        def fake_read(frame_count, channels):
+            return np.full((frame_count, channels), 0.0005, dtype="float32")
 
-        with patch.object(sd, "rec", side_effect=fake_rec), patch.object(sd, "wait", return_value=None):
+        with _patch_input_stream(sd, fake_read):
             with self.assertLogs("app.brain.voice.audio_io", level="WARNING") as logs:
                 audio_io.record_from_microphone(1.0, sample_rate=VOICE_SAMPLE_RATE_HZ)
 
@@ -617,10 +661,10 @@ class VoiceRecordingDiagnosticsTests(unittest.TestCase):
 
         from app.brain.voice import audio_io
 
-        def fake_rec(frame_count, samplerate, channels, dtype, device=None):
-            return np.full((frame_count, channels), 0.999, dtype=dtype)
+        def fake_read(frame_count, channels):
+            return np.full((frame_count, channels), 0.999, dtype="float32")
 
-        with patch.object(sd, "rec", side_effect=fake_rec), patch.object(sd, "wait", return_value=None):
+        with _patch_input_stream(sd, fake_read):
             with self.assertLogs("app.brain.voice.audio_io", level="WARNING") as logs:
                 audio_io.record_from_microphone(1.0, sample_rate=VOICE_SAMPLE_RATE_HZ)
 
@@ -632,12 +676,12 @@ class VoiceRecordingDiagnosticsTests(unittest.TestCase):
 
         from app.brain.voice import audio_io
 
-        def fake_rec(frame_count, samplerate, channels, dtype, device=None):
-            recording = np.full((frame_count, channels), 0.3, dtype=dtype)
+        def fake_read(frame_count, channels):
+            recording = np.full((frame_count, channels), 0.3, dtype="float32")
             recording[:, 0] = 0.0  # one channel picking up (near-)nothing this attempt
             return recording
 
-        with patch.object(sd, "rec", side_effect=fake_rec), patch.object(sd, "wait", return_value=None):
+        with _patch_input_stream(sd, fake_read):
             with self.assertLogs("app.brain.voice.audio_io", level="WARNING") as logs:
                 audio_io.record_from_microphone(1.0, sample_rate=VOICE_SAMPLE_RATE_HZ)
 
@@ -737,21 +781,22 @@ class VoiceSilenceTrimFixTests(unittest.TestCase):
         native_sample_rate = 44100
         position = {"frames": 0}
 
-        def fake_rec(frame_count, samplerate, channels, dtype, device=None):
-            # Native capture now happens in small chunks (the RFC-009 latency fix), so this
-            # simulates the intended overall 6s envelope -- 2s silence, 2s of signal, 2s
-            # silence, matching the shape of the real field recordings that exposed this bug
-            # -- across however many chunk-sized `rec()` calls it takes to reach it, rather
-            # than assuming (as before the latency fix) a single call spanning the full 6s.
+        def fake_read(frame_count, channels):
+            # Native capture now happens in small chunks read from a single continuous
+            # stream (the RFC-009 latency fix), so this simulates the intended overall 6s
+            # envelope -- 2s silence, 2s of signal, 2s silence, matching the shape of the
+            # real field recordings that exposed this bug -- across however many
+            # chunk-sized `.read()` calls it takes to reach it, rather than assuming (as
+            # before the latency fix) a single call spanning the full 6s.
             start = position["frames"]
             end = start + frame_count
             position["frames"] = end
-            recording = np.zeros((frame_count, channels), dtype=dtype)
+            recording = np.zeros((frame_count, channels), dtype="float32")
             t = (np.arange(start, end, dtype=np.float64) / native_sample_rate)
             recording[(t >= 2.0) & (t < 4.0), :] = 0.3
             return recording
 
-        with patch.object(sd, "rec", side_effect=fake_rec), patch.object(sd, "wait", return_value=None):
+        with _patch_input_stream(sd, fake_read):
             with self.assertLogs("app.brain.voice.audio_io", level="INFO") as logs:
                 samples = audio_io.record_from_microphone(6.0, sample_rate=VOICE_SAMPLE_RATE_HZ)
 
